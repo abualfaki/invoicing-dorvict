@@ -1,0 +1,679 @@
+Option Explicit
+
+'========================
+' Main entry
+'========================
+Sub ProcessAllNonReenaPayrolls()
+    Const EXCLUDED_PATTERN As String = "REENA"
+
+    Dim wsSource As Worksheet
+    Dim lastRow As Long, colClient As Long
+    Dim rowIdx As Long
+    Dim rawClient As String
+    Dim clientMap As New Collection
+    Dim clientName As Variant
+
+    Set wsSource = ActiveSheet
+    colClient = 3
+    lastRow = wsSource.Cells(wsSource.Rows.Count, colClient).End(xlUp).Row
+
+    For rowIdx = 2 To lastRow
+        rawClient = Trim$(CStr(wsSource.Cells(rowIdx, colClient).Value))
+        If Len(rawClient) > 0 Then
+            If InStr(1, rawClient, EXCLUDED_PATTERN, vbTextCompare) = 0 Then
+                If Not CollectionContains(clientMap, rawClient) Then
+                    clientMap.Add rawClient
+                End If
+            End If
+        End If
+    Next rowIdx
+
+    If clientMap.Count = 0 Then
+        MsgBox "No non-""" & EXCLUDED_PATTERN & """ clients were found.", vbInformation
+        Exit Sub
+    End If
+
+    For Each clientName In clientMap
+        ProcessSingleClientNonReena wsSource, CStr(clientName)
+    Next clientName
+
+    MsgBox clientMap.Count & " non-""" & EXCLUDED_PATTERN & """ client(s) processed.", vbInformation
+End Sub
+
+'========================
+' Per-client processing
+'========================
+Private Sub ProcessSingleClientNonReena(ByVal wsSource As Worksheet, ByVal targetClient As String)
+    Const TABLE_HEADER_ROW As Long = 13
+    Const HST_RATE As Double = 0.13
+
+    Dim wsDest As Worksheet
+    Dim lastRow As Long, lastCol As Long, destRow As Long
+    Dim colDate As Long, colName As Long, colClient As Long
+    Dim colStart As Long, colEnd As Long, colRate As Long
+    Dim colTotal As Long, colDuration As Long, colUnit As Long, colONS As Long
+    Dim colHelper As Long, colSortKey As Long
+    Dim i As Long
+
+    lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
+    lastCol = wsSource.Cells(1, wsSource.Columns.Count).End(xlToLeft).Column
+
+    colDate = 1
+    colName = 2
+    colClient = 3
+    colStart = 4
+    colEnd = 5
+    colRate = 6
+    colTotal = 7
+    colDuration = 8
+    colUnit = 9
+    colONS = 10
+
+    Dim sheetName As String
+    sheetName = BuildSheetName(targetClient)
+
+    Dim itemDescription As String
+    itemDescription = ResolveItemDescription(targetClient)
+
+    Dim clientPrefix As String
+    clientPrefix = GetClientPrefix(targetClient)
+
+    Dim suffixNoSpaces As String
+    suffixNoSpaces = StripWhitespace(itemDescription)
+
+    On Error Resume Next
+    Set wsDest = ThisWorkbook.Sheets(sheetName)
+    On Error GoTo 0
+
+    If wsDest Is Nothing Then
+        Set wsDest = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+        wsDest.Name = sheetName
+    Else
+        wsDest.Cells.Clear
+    End If
+
+    wsSource.Rows(1).Copy wsDest.Rows(1)
+
+    destRow = TABLE_HEADER_ROW + 1
+    wsDest.Columns(colDate).NumberFormat = "dd/mm/yyyy"
+
+    '========================
+    ' Build output rows
+    '========================
+    For i = 2 To lastRow
+        If Trim$(CStr(wsSource.Cells(i, colClient).Value)) = targetClient Then
+
+            Dim isONS As Boolean
+            isONS = (UCase$(Trim$(CStr(wsSource.Cells(i, colONS).Value))) = "YES")
+
+            If isONS Then
+                Dim originalEnd As Variant
+                originalEnd = wsSource.Cells(i, colEnd).Value
+
+                wsDest.Rows(destRow).Value = wsSource.Rows(i).Value
+                wsDest.Cells(destRow, colDate).Value = NormalizeDate(wsSource.Cells(i, colDate).Value)
+                wsDest.Cells(destRow, colStart).Value = TimeValue("11:00:00 PM")
+                wsDest.Cells(destRow, colEnd).Value = TimeValue("6:00:00 AM")
+                wsDest.Cells(destRow, colDuration).Value = 1
+                wsDest.Cells(destRow, colClient).Value = itemDescription
+                wsDest.Cells(destRow, colUnit).Value = CStr(wsDest.Cells(destRow, colUnit).Value) & " - ONS"
+                wsDest.Cells(destRow, colTotal).Formula = "=ROUND(" & wsDest.Cells(destRow, colDuration).Address(False, False) & "*" & wsDest.Cells(destRow, colRate).Address(False, False) & ",2)"
+                destRow = destRow + 1
+
+                wsDest.Rows(destRow).Value = wsSource.Rows(i).Value
+                wsDest.Cells(destRow, colDate).Value = NormalizeDate(wsSource.Cells(i, colDate).Value)
+                wsDest.Cells(destRow, colStart).Value = TimeValue("6:00:00 AM")
+                wsDest.Cells(destRow, colEnd).Value = originalEnd
+
+                Dim rate2 As Double
+                If InStr(1, UCase$(CStr(wsSource.Cells(i, colName).Value)), "MEDS", vbTextCompare) > 0 Then
+                    rate2 = 27.22
+                Else
+                    rate2 = 26.88
+                End If
+                wsDest.Cells(destRow, colRate).Value = rate2
+
+                Dim dur As Double
+                If IsDate(originalEnd) And originalEnd < TimeValue("6:00:00 AM") Then
+                    dur = (originalEnd + 1) - TimeValue("6:00:00 AM")
+                Else
+                    dur = originalEnd - TimeValue("6:00:00 AM")
+                End If
+                wsDest.Cells(destRow, colDuration).Value = Round(dur * 24, 2)
+
+                wsDest.Cells(destRow, colClient).Value = itemDescription
+                wsDest.Cells(destRow, colUnit).Value = ""
+                wsDest.Cells(destRow, colTotal).Formula = "=ROUND(" & wsDest.Cells(destRow, colDuration).Address(False, False) & "*" & wsDest.Cells(destRow, colRate).Address(False, False) & ",2)"
+                destRow = destRow + 1
+
+            Else
+                wsDest.Rows(destRow).Value = wsSource.Rows(i).Value
+                wsDest.Cells(destRow, colDate).Value = NormalizeDate(wsSource.Cells(i, colDate).Value)
+
+                Dim startTime As Variant, endTime As Variant, duration As Double
+                startTime = wsSource.Cells(i, colStart).Value
+                endTime = wsSource.Cells(i, colEnd).Value
+
+                If endTime < startTime Then
+                    duration = (endTime + 1) - startTime
+                Else
+                    duration = endTime - startTime
+                End If
+                wsDest.Cells(destRow, colDuration).Value = Round(duration * 24, 2)
+
+                wsDest.Cells(destRow, colClient).Value = itemDescription
+                wsDest.Cells(destRow, colTotal).Formula = "=ROUND(" & wsDest.Cells(destRow, colDuration).Address(False, False) & "*" & wsDest.Cells(destRow, colRate).Address(False, False) & ",2)"
+                destRow = destRow + 1
+            End If
+        End If
+    Next i
+
+    If destRow = TABLE_HEADER_ROW + 1 Then
+        wsDest.Cells.Clear
+        wsDest.Name = sheetName & " (Empty)"
+        Exit Sub
+    End If
+
+    For i = TABLE_HEADER_ROW + 1 To destRow - 1
+        wsDest.Cells(i, colName).Value = Replace(CStr(wsDest.Cells(i, colName).Value), "@", "")
+    Next i
+
+    ' Helper columns for grouping and sorting
+    colHelper = lastCol + 1
+    colSortKey = lastCol + 2
+
+    For i = TABLE_HEADER_ROW + 1 To destRow - 1
+        Dim unitValue As String
+        unitValue = CStr(wsDest.Cells(i, colUnit).Value)
+
+        If unitValue <> "" Then
+            wsDest.Cells(i, colHelper).Value = Replace(unitValue, " - ONS", "")
+        ElseIf i > TABLE_HEADER_ROW + 1 Then
+            wsDest.Cells(i, colHelper).Value = wsDest.Cells(i - 1, colHelper).Value
+        End If
+
+        Dim startVal As Variant
+        startVal = wsDest.Cells(i, colStart).Value
+        If IsDate(startVal) Then
+            wsDest.Cells(i, colSortKey).Value = CDbl(startVal)
+        Else
+            wsDest.Cells(i, colSortKey).Value = 0
+        End If
+
+        If InStr(1, unitValue, "ONS", vbTextCompare) > 0 Then
+            wsDest.Cells(i, colSortKey).Value = wsDest.Cells(i, colSortKey).Value - 1
+        End If
+    Next i
+
+    ' Sort by unit, date, adjusted start time, then caregiver name
+    With wsDest.Sort
+        .SortFields.Clear
+        .SortFields.Add Key:=wsDest.Columns(colHelper), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SortFields.Add Key:=wsDest.Columns(colDate), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SortFields.Add Key:=wsDest.Columns(colSortKey), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SortFields.Add Key:=wsDest.Columns(colName), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SetRange wsDest.Range(wsDest.Cells(TABLE_HEADER_ROW + 1, 1), wsDest.Cells(destRow - 1, colSortKey))
+        .Header = xlNo
+        .Apply
+    End With
+
+    ' Header row at row 13
+    wsDest.Rows(TABLE_HEADER_ROW).Value = wsDest.Rows(1).Value
+    wsDest.Rows(1).Clear
+
+    wsDest.Cells(TABLE_HEADER_ROW, colName).Value = "Recorded b Name"
+    wsDest.Cells(TABLE_HEADER_ROW, colClient).Value = "Item Description"
+    wsDest.Cells(TABLE_HEADER_ROW, colRate).Value = "Rate"
+    wsDest.Cells(TABLE_HEADER_ROW, colTotal).Value = "Amount"
+    wsDest.Cells(TABLE_HEADER_ROW, colUnit).Value = "Code"
+
+    With wsDest.Range(wsDest.Cells(TABLE_HEADER_ROW, 1), wsDest.Cells(TABLE_HEADER_ROW, lastCol))
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        .Borders.LineStyle = xlContinuous
+        .Borders.Weight = xlMedium
+    End With
+
+    wsDest.Range(wsDest.Cells(TABLE_HEADER_ROW + 1, colStart), wsDest.Cells(destRow - 1, colEnd)).NumberFormat = "h:mm:ss AM/PM"
+
+    wsDest.Columns(colRate).NumberFormat = "0.00"
+    wsDest.Columns(colTotal).NumberFormat = "#,##0.00"
+
+    With wsDest.Range(wsDest.Cells(TABLE_HEADER_ROW, 1), wsDest.Cells(destRow - 1, lastCol))
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        .Font.Name = "Arial"
+        .Font.Size = 14
+        .Font.Bold = False
+    End With
+    wsDest.Rows(TABLE_HEADER_ROW).Font.Bold = True
+
+    ApplyInvoiceHeaderNonReena wsDest, TABLE_HEADER_ROW, itemDescription, clientPrefix, suffixNoSpaces
+
+    ' Insert per-unit subtotals
+    Dim currentUnit As String
+    Dim r As Long, startRow As Long
+
+    r = TABLE_HEADER_ROW + 1
+    currentUnit = CStr(wsDest.Cells(r, colHelper).Value)
+    startRow = r
+
+    Do While r < destRow
+        If CStr(wsDest.Cells(r, colHelper).Value) = currentUnit Then
+            r = r + 1
+        Else
+            ApplyUnitSectionFormatting wsDest, startRow, r - 1, lastCol
+            InsertSubtotalRow wsDest, r, startRow, colName, colDuration, colTotal, lastCol, currentUnit
+            currentUnit = CStr(wsDest.Cells(r + 1, colHelper).Value)
+            startRow = r + 1
+            destRow = destRow + 1
+            r = r + 1
+        End If
+    Loop
+
+    InsertSubtotalRow wsDest, r, startRow, colName, colDuration, colTotal, lastCol, currentUnit
+    ApplyUnitSectionFormatting wsDest, startRow, r - 1, lastCol
+
+    ' Final totals box + footer
+    Dim totalsRow As Long
+    totalsRow = destRow + 1
+
+    AddFinalTotalsBox_SumOnlySubtotalRows wsDest, TABLE_HEADER_ROW + 1, destRow, colName, colDuration, colTotal, totalsRow, HST_RATE
+    AddFooterCodesAndPaymentInfo wsDest, totalsRow
+
+    ' Row heights
+    wsDest.Rows.RowHeight = 22
+    wsDest.Rows(7).RowHeight = 34.5
+
+    ' Cleanup + widths
+    wsDest.Columns(colSortKey).Delete
+    wsDest.Columns(colHelper).Delete
+    ApplyFixedColumnWidths wsDest
+
+    ' Print area A:I through ENQUIRIES row
+    SetPrintAreaThroughEnquiries wsDest
+    ApplyPrintSetup wsDest
+End Sub
+
+'========================
+' Column widths A:I
+'========================
+Private Sub ApplyFixedColumnWidths(ByVal ws As Worksheet)
+    ws.Columns("A").ColumnWidth = 17.5
+    ws.Columns("B").ColumnWidth = 70.14
+    ws.Columns("C").ColumnWidth = 49
+    ws.Columns("D").ColumnWidth = 16.29
+    ws.Columns("E").ColumnWidth = 17.57
+    ws.Columns("F").ColumnWidth = 18.14
+    ws.Columns("G").ColumnWidth = 15.86
+    ws.Columns("H").ColumnWidth = 11.14
+    ws.Columns("I").ColumnWidth = 25.57
+End Sub
+
+'========================
+' Print setup
+'========================
+Private Sub ApplyPrintSetup(ByVal ws As Worksheet)
+    Dim lastPrintRow As Long
+    lastPrintRow = GetEnquiriesRow(ws)
+    If lastPrintRow = 0 Then lastPrintRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+
+    With ws.PageSetup
+        .Orientation = xlLandscape
+        .TopMargin = Application.InchesToPoints(0.75)
+        .BottomMargin = Application.InchesToPoints(0.75)
+        .LeftMargin = Application.InchesToPoints(0.25)
+        .RightMargin = Application.InchesToPoints(0.25)
+        .HeaderMargin = Application.InchesToPoints(0.3)
+        .FooterMargin = Application.InchesToPoints(0.3)
+        .Zoom = False
+        .FitToPagesWide = 1
+        .FitToPagesTall = False
+    End With
+
+    ws.ResetAllPageBreaks
+    AddHorizontalPageBreaksEveryNRows ws, 41, 1, lastPrintRow
+End Sub
+
+Private Sub AddHorizontalPageBreaksEveryNRows(ByVal ws As Worksheet, ByVal rowsPerPage As Long, ByVal startRow As Long, ByVal endRow As Long)
+    Dim rr As Long
+    If rowsPerPage <= 0 Then Exit Sub
+    If endRow <= startRow Then Exit Sub
+
+    rr = startRow + rowsPerPage
+    Do While rr <= endRow
+        ws.HPageBreaks.Add Before:=ws.Rows(rr)
+        rr = rr + rowsPerPage
+    Loop
+End Sub
+
+'========================
+' Item Description helper
+'========================
+Private Function ResolveItemDescription(ByVal targetClient As String) As String
+    ResolveItemDescription = GetDisplayClientName(targetClient)
+End Function
+
+'========================
+' Invoice header area
+'========================
+Private Sub ApplyInvoiceHeaderNonReena(ByVal ws As Worksheet, ByVal tableHeaderRow As Long, _
+    ByVal itemDescription As String, ByVal clientPrefix As String, ByVal clientSuffix As String)
+
+    ws.Rows("1:" & (tableHeaderRow - 1)).RowHeight = 18
+
+    ws.Range("A9").Value = clientPrefix
+    ws.Range("A10").Value = clientSuffix
+
+    With ws.Rows("9:10").Font
+        .Name = "Arial"
+        .Size = 14
+        .Bold = True
+    End With
+
+    With ws.Range("A9:A10")
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlCenter
+    End With
+
+    With ws.Range("C5:D5")
+        .UnMerge
+        .Merge
+        .Value = """Door to Caring Hands"""
+        .Font.Name = "Arial"
+        .Font.Size = 14
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+    End With
+
+    With ws.Range("C7:D7")
+        .UnMerge
+        .Merge
+        .Value = "INVOICE"
+        .Font.Name = "Arial"
+        .Font.Size = 24
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+    End With
+
+    ws.Range("F9").Value = "Invoice #"
+    ws.Range("F10").Value = "DATE:"
+    ws.Range("F11").Value = "BUSINESS #: 891839433RT0001"
+
+    With ws.Range("F9:F11")
+        .Font.Name = "Arial"
+        .Font.Size = 14
+        .Font.Bold = True
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlCenter
+    End With
+
+    With ws.Range("G9:G11")
+        .Font.Name = "Arial"
+        .Font.Size = 14
+        .Font.Bold = False
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlCenter
+        .Value = ""
+    End With
+End Sub
+
+'========================
+' Final totals box
+'========================
+Private Sub AddFinalTotalsBox_SumOnlySubtotalRows( _
+    ByVal ws As Worksheet, _
+    ByVal firstRow As Long, _
+    ByVal lastRow As Long, _
+    ByVal colName As Long, _
+    ByVal colDuration As Long, _
+    ByVal colAmount As Long, _
+    ByVal startRow As Long, _
+    ByVal hstRate As Double)
+
+    Const COL_LABEL As Long = 6  ' F
+    Const COL_AMT As Long = 7    ' G
+    Const COL_DUR As Long = 8    ' H
+
+    Dim criteriaRange As Range, amtRange As Range, durRange As Range
+    Set criteriaRange = ws.Range(ws.Cells(firstRow, colName), ws.Cells(lastRow, colName))
+    Set amtRange = ws.Range(ws.Cells(firstRow, colAmount), ws.Cells(lastRow, colAmount))
+    Set durRange = ws.Range(ws.Cells(firstRow, colDuration), ws.Cells(lastRow, colDuration))
+
+    ws.Cells(startRow, COL_LABEL).Value = "SUBTOTAL"
+    ws.Cells(startRow, COL_AMT).Formula = "=ROUND(SUMIF(" & criteriaRange.Address(False, False) & ",""Subtotal for Unit*""," & amtRange.Address(False, False) & "),2)"
+    ws.Cells(startRow, COL_DUR).Formula = "=ROUND(SUMIF(" & criteriaRange.Address(False, False) & ",""Subtotal for Unit*""," & durRange.Address(False, False) & "),2)"
+
+    ws.Cells(startRow + 1, COL_LABEL).Value = "HST 13%"
+    ws.Cells(startRow + 1, COL_AMT).Formula = "=ROUND(" & ws.Cells(startRow, COL_AMT).Address(False, False) & "*" & CStr(hstRate) & ",2)"
+    ws.Cells(startRow + 1, COL_DUR).Value = ""
+
+    ws.Cells(startRow + 2, COL_LABEL).Value = "TOTAL"
+    ws.Cells(startRow + 2, COL_AMT).Formula = "=" & ws.Cells(startRow, COL_AMT).Address(False, False) & "+" & ws.Cells(startRow + 1, COL_AMT).Address(False, False)
+    ws.Cells(startRow + 2, COL_DUR).Value = ""
+
+    Dim rngBox As Range
+    Set rngBox = ws.Range(ws.Cells(startRow, COL_LABEL), ws.Cells(startRow + 2, COL_DUR))
+
+    With rngBox
+        .Font.Name = "Arial"
+        .Font.Size = 14
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+    End With
+
+    ws.Range(ws.Cells(startRow, COL_AMT), ws.Cells(startRow + 2, COL_AMT)).NumberFormat = "#,##0.00"
+
+    With rngBox.Borders
+        .LineStyle = xlContinuous
+        .Weight = xlMedium
+    End With
+End Sub
+
+'========================
+' Footer
+'========================
+Private Sub AddFooterCodesAndPaymentInfo(ByVal ws As Worksheet, ByVal totalsStartRow As Long)
+
+    Dim r As Long
+    r = totalsStartRow + 3
+    r = r + 1
+
+    ws.Range("A" & r).Value = "CODES:"
+    ws.Range("B" & r).Value = "ONA=OVERNIGHT AWAKE"
+    ws.Range("C" & r).Value = "MC=MINIMUM CHARGE"
+
+    ws.Range("B" & (r + 1)).Value = "ONS=OVERNIGHT SLEEP"
+    ws.Range("C" & (r + 1)).Value = "TX=TAXI"
+
+    ws.Range("B" & (r + 2)).Value = "STAT=STATUTORY HOLIDAY"
+    ws.Range("C" & (r + 2)).Value = "DST- DAYLIGHT SAVINGS TIME"
+
+    ws.Range("B" & (r + 3)).Value = "SA=SUPERVISOR APPROVED"
+    ws.Range("C" & (r + 3)).Value = "OT=OVERTIME"
+
+    Dim rPay As Long
+    rPay = r + 5
+
+    ws.Range("A" & rPay).Value = "PLEASE MAKE CHEQUE OR ELECTRONIC FUNDS TRANSFER (EFT) PAYABLE TO:"
+    ws.Range("A" & (rPay + 1)).Value = "DORVICT RESOURCE & CONSULTING CENTRE INC."
+    ws.Range("A" & (rPay + 2)).Value = "TEL: (416) 661-1740 Ext . 225"
+    ws.Range("A" & (rPay + 3)).Value = "1275 Finch Ave. W. , Ste. 616, Toronto,On, M3J 0L5"
+
+    ws.Range("C" & (rPay + 4)).Value = "1.5% INTEREST CHARGE APPLIES TO BALANCES OVER 30 DAYS"
+    ws.Range("C" & (rPay + 4)).Font.Bold = True
+
+    ws.Range("A" & (rPay + 5)).Value = "ENQUIRIES:"
+    ws.Range("B" & (rPay + 5)).Value = "accounting@dorvict.com"
+    ws.Range("B" & (rPay + 5)).Font.Underline = xlUnderlineStyleSingle
+    ws.Range("B" & (rPay + 5)).Font.Bold = True
+
+    Dim footerLastRow As Long
+    footerLastRow = rPay + 5
+
+    With ws.Range(ws.Cells(r, 1), ws.Cells(footerLastRow, 9))
+        .Font.Name = "Arial"
+        .Font.Size = 12
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlCenter
+    End With
+
+    ws.Range("A" & r).Font.Bold = True
+    ws.Range("A" & rPay & ":A" & (rPay + 5)).Font.Bold = True
+    ws.Range("A" & (rPay + 1)).Font.Bold = True
+End Sub
+
+'========================
+' Print area A:I through ENQUIRIES row
+'========================
+Private Sub SetPrintAreaThroughEnquiries(ByVal ws As Worksheet)
+    Dim lastRow As Long
+    lastRow = GetEnquiriesRow(ws)
+    If lastRow = 0 Then lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+    ws.PageSetup.PrintArea = ws.Range("A1:I" & lastRow).Address
+End Sub
+
+Private Function GetEnquiriesRow(ByVal ws As Worksheet) As Long
+    Dim f As Range
+    On Error Resume Next
+    Set f = ws.Columns("A").Find(What:="ENQUIRIES:", LookIn:=xlValues, LookAt:=xlWhole, _
+                                 SearchOrder:=xlByRows, SearchDirection:=xlPrevious, MatchCase:=False)
+    On Error GoTo 0
+
+    If f Is Nothing Then
+        GetEnquiriesRow = 0
+    Else
+        GetEnquiriesRow = f.Row
+    End If
+End Function
+
+'========================
+' Borders + subtotal row
+'========================
+Private Sub ApplyUnitSectionFormatting(ws As Worksheet, startRow As Long, endRow As Long, lastCol As Long)
+    Dim c As Long
+    For c = 1 To lastCol
+        With ws.Range(ws.Cells(startRow, c), ws.Cells(endRow, c)).Borders(xlEdgeLeft)
+            .LineStyle = xlContinuous
+            .Weight = xlMedium
+        End With
+        With ws.Range(ws.Cells(startRow, c), ws.Cells(endRow, c)).Borders(xlEdgeRight)
+            .LineStyle = xlContinuous
+            .Weight = xlMedium
+        End With
+    Next c
+End Sub
+
+Private Sub InsertSubtotalRow(ws As Worksheet, insertRow As Long, startRow As Long, _
+    colName As Long, colDuration As Long, colTotal As Long, lastCol As Long, currentUnit As String)
+
+    ws.Rows(insertRow).Insert Shift:=xlDown
+    ws.Cells(insertRow, colName).Value = "Subtotal for Unit " & currentUnit
+    ws.Cells(insertRow, colDuration).Formula = "=SUM(" & ws.Range(ws.Cells(startRow, colDuration), ws.Cells(insertRow - 1, colDuration)).Address(False, False) & ")"
+    ws.Cells(insertRow, colTotal).Formula = "=SUM(" & ws.Range(ws.Cells(startRow, colTotal), ws.Cells(insertRow - 1, colTotal)).Address(False, False) & ")"
+    ws.Rows(insertRow).Font.Bold = True
+
+    With ws.Range(ws.Cells(insertRow, 1), ws.Cells(insertRow, lastCol)).Borders
+        .LineStyle = xlContinuous
+        .Weight = xlMedium
+    End With
+End Sub
+
+'========================
+' Helper: client name after " - "
+'========================
+Private Function GetDisplayClientName(ByVal fullClient As String) As String
+    Dim pos As Long
+    pos = InStr(fullClient, " - ")
+    If pos > 0 Then
+        GetDisplayClientName = Mid$(fullClient, pos + 3)
+    Else
+        GetDisplayClientName = fullClient
+    End If
+End Function
+
+Private Function GetClientPrefix(ByVal fullClient As String) As String
+    Dim pos As Long
+    pos = InStr(fullClient, " - ")
+    If pos > 0 Then
+        GetClientPrefix = Trim$(Left$(fullClient, pos - 1))
+    Else
+        GetClientPrefix = Trim$(fullClient)
+    End If
+End Function
+
+Private Function StripWhitespace(ByVal value As String) As String
+    Dim result As String
+    result = CStr(value)
+
+    Do While Len(result) > 0 And ShouldTrimChar(Left$(result, 1))
+        result = Mid$(result, 2)
+    Loop
+
+    Do While Len(result) > 0 And ShouldTrimChar(Right$(result, 1))
+        result = Left$(result, Len(result) - 1)
+    Loop
+
+    StripWhitespace = result
+End Function
+
+Private Function ShouldTrimChar(ByVal ch As String) As Boolean
+    Select Case ch
+        Case " ", vbTab, vbCr, vbLf
+            ShouldTrimChar = True
+        Case Else
+            ShouldTrimChar = False
+    End Select
+End Function
+
+'========================
+' Sheet name sanitizer
+'========================
+Private Function BuildSheetName(ByVal fullClient As String) As String
+    Dim baseName As String
+    Dim sanitized As String
+
+    baseName = Trim$(GetDisplayClientName(fullClient))
+    If Len(baseName) = 0 Then baseName = Trim$(fullClient)
+    If Len(baseName) = 0 Then baseName = "Client"
+
+    sanitized = Replace(baseName, ":", "-")
+    sanitized = Replace(sanitized, "/", "-")
+    sanitized = Replace(sanitized, "\", "-")
+    sanitized = Replace(sanitized, "?", "-")
+    sanitized = Replace(sanitized, "*", "-")
+    sanitized = Replace(sanitized, "[", "(")
+    sanitized = Replace(sanitized, "]", ")")
+
+    If Len(sanitized) > 31 Then sanitized = Left$(sanitized, 31)
+    BuildSheetName = sanitized
+End Function
+
+'========================
+' Date normalizer
+'========================
+Private Function NormalizeDate(val As Variant) As Variant
+    If IsDate(val) Then
+        NormalizeDate = DateValue(Format(val, "dd/mm/yyyy"))
+    Else
+        NormalizeDate = val
+    End If
+End Function
+
+'========================
+' Collection helper
+'========================
+Private Function CollectionContains(col As Collection, ByVal value As String) As Boolean
+    Dim item As Variant
+    For Each item In col
+        If item = value Then
+            CollectionContains = True
+            Exit Function
+        End If
+    Next item
+    CollectionContains = False
+End Function
