@@ -1,0 +1,254 @@
+Option Explicit
+
+Private Const EXPORT_EXCEL_PATH As String = "C:\Users\Admin\OneDrive - Dorvict Home and Health Care Services\Documents\dorvict_invoice_pipeline\exports\excel"
+Private Const EXPORT_PDF_PATH As String = "C:\Users\Admin\OneDrive - Dorvict Home and Health Care Services\Documents\dorvict_invoice_pipeline\exports\pdf"
+
+Private Const EXCEL_BUTTON_NAME As String = "btnSaveInvoiceAsExcel"
+Private Const PDF_BUTTON_NAME As String = "btnSaveInvoiceAsPdf"
+
+'========================
+' Button setup
+'========================
+Public Sub AddInvoiceExportButtons()
+    AddInvoiceExportButtonsForSheet ActiveSheet
+    MsgBox "Invoice export buttons added to sheet '" & ActiveSheet.Name & "'.", vbInformation
+End Sub
+
+Public Sub AddInvoiceExportButtonsForSheet(ByVal ws As Worksheet)
+    RemoveInvoiceExportButtons ws
+    CreateInvoiceExportButton ws, EXCEL_BUTTON_NAME, "Save as Excel", "SaveActiveInvoiceSheetAsExcel", ws.Range("K2").Left, ws.Range("K2").Top
+    CreateInvoiceExportButton ws, PDF_BUTTON_NAME, "Save as PDF", "SaveActiveInvoiceSheetAsPdf", ws.Range("K4").Left, ws.Range("K4").Top
+End Sub
+
+Public Sub RemoveInvoiceExportButtonsFromActiveSheet()
+    RemoveInvoiceExportButtons ActiveSheet
+End Sub
+
+'========================
+' Button actions
+'========================
+Public Sub SaveActiveInvoiceSheetAsExcel()
+    ExportInvoiceSheetAsExcel ResolveExportWorksheet()
+End Sub
+
+Public Sub SaveActiveInvoiceSheetAsPdf()
+    ExportInvoiceSheetAsPdf ResolveExportWorksheet()
+End Sub
+
+'========================
+' Export logic
+'========================
+Private Sub ExportInvoiceSheetAsExcel(ByVal ws As Worksheet)
+    Dim fileBaseName As String
+    Dim exportPath As String
+    Dim fullFilePath As String
+    Dim tempWorkbook As Workbook
+
+    fileBaseName = BuildInvoiceExportFileName(ws)
+    If Len(fileBaseName) = 0 Then Exit Sub
+
+    exportPath = NormalizeFolderPath(EXPORT_EXCEL_PATH)
+    EnsureFolderExists exportPath
+    fullFilePath = exportPath & fileBaseName & ".xlsx"
+
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    On Error GoTo CleanFail
+
+    DeleteFileIfExists fullFilePath
+    ws.Copy
+    Set tempWorkbook = ActiveWorkbook
+
+    tempWorkbook.SaveAs Filename:=fullFilePath, FileFormat:=xlOpenXMLWorkbook
+    tempWorkbook.Close SaveChanges:=False
+
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+
+    MsgBox "Excel workbook saved to:" & vbCrLf & fullFilePath, vbInformation
+    Exit Sub
+
+CleanFail:
+    On Error Resume Next
+    If Not tempWorkbook Is Nothing Then tempWorkbook.Close SaveChanges:=False
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    MsgBox "Excel export failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub ExportInvoiceSheetAsPdf(ByVal ws As Worksheet)
+    Dim fileBaseName As String
+    Dim exportPath As String
+    Dim fullFilePath As String
+    Dim excelButtonVisible As Boolean
+    Dim pdfButtonVisible As Boolean
+
+    fileBaseName = BuildInvoiceExportFileName(ws)
+    If Len(fileBaseName) = 0 Then Exit Sub
+
+    exportPath = NormalizeFolderPath(EXPORT_PDF_PATH)
+    EnsureFolderExists exportPath
+    fullFilePath = exportPath & fileBaseName & ".pdf"
+
+    On Error GoTo CleanFail
+    Application.ScreenUpdating = False
+
+    DeleteFileIfExists fullFilePath
+
+    CaptureButtonVisibility ws, EXCEL_BUTTON_NAME, excelButtonVisible
+    CaptureButtonVisibility ws, PDF_BUTTON_NAME, pdfButtonVisible
+    SetButtonVisibility ws, EXCEL_BUTTON_NAME, False
+    SetButtonVisibility ws, PDF_BUTTON_NAME, False
+
+    ws.ExportAsFixedFormat Type:=xlTypePDF, _
+                           Filename:=fullFilePath, _
+                           Quality:=xlQualityStandard, _
+                           IncludeDocProperties:=True, _
+                           IgnorePrintAreas:=False, _
+                           OpenAfterPublish:=False
+
+    SetButtonVisibility ws, EXCEL_BUTTON_NAME, excelButtonVisible
+    SetButtonVisibility ws, PDF_BUTTON_NAME, pdfButtonVisible
+    Application.ScreenUpdating = True
+    MsgBox "PDF saved to:" & vbCrLf & fullFilePath, vbInformation
+    Exit Sub
+
+CleanFail:
+    On Error Resume Next
+    SetButtonVisibility ws, EXCEL_BUTTON_NAME, excelButtonVisible
+    SetButtonVisibility ws, PDF_BUTTON_NAME, pdfButtonVisible
+    Application.ScreenUpdating = True
+    MsgBox "PDF export failed: " & Err.Description, vbExclamation
+End Sub
+
+'========================
+' Helpers
+'========================
+Private Sub CreateInvoiceExportButton(ByVal ws As Worksheet, ByVal buttonName As String, ByVal captionText As String, ByVal macroName As String, ByVal leftPos As Double, ByVal topPos As Double)
+    Dim buttonObject As Button
+
+    Set buttonObject = ws.Buttons.Add(leftPos, topPos, 120, 28)
+
+    With buttonObject
+        .Name = buttonName
+        .Caption = captionText
+        .OnAction = "'" & ThisWorkbook.Name & "'!" & macroName
+    End With
+End Sub
+
+Private Sub RemoveInvoiceExportButtons(ByVal ws As Worksheet)
+    On Error Resume Next
+    ws.Buttons(EXCEL_BUTTON_NAME).Delete
+    ws.Buttons(PDF_BUTTON_NAME).Delete
+    On Error GoTo 0
+End Sub
+
+Private Sub CaptureButtonVisibility(ByVal ws As Worksheet, ByVal buttonName As String, ByRef isVisible As Boolean)
+    On Error Resume Next
+    isVisible = CBool(ws.Buttons(buttonName).Visible)
+    On Error GoTo 0
+End Sub
+
+Private Sub SetButtonVisibility(ByVal ws As Worksheet, ByVal buttonName As String, ByVal isVisible As Boolean)
+    On Error Resume Next
+    ws.Buttons(buttonName).Visible = isVisible
+    On Error GoTo 0
+End Sub
+
+Private Function BuildInvoiceExportFileName(ByVal ws As Worksheet) As String
+    Dim invoiceNumber As String
+    Dim locationName As String
+
+    invoiceNumber = Trim$(CStr(ws.Range("G9").Text))
+    locationName = Trim$(CStr(ws.Range("A10").Text))
+
+    If Len(invoiceNumber) = 0 Then
+        MsgBox "Cell G9 is blank. Enter an invoice number before exporting.", vbExclamation
+        Exit Function
+    End If
+
+    If Len(locationName) = 0 Then
+        MsgBox "Cell A10 is blank. Enter a location name before exporting.", vbExclamation
+        Exit Function
+    End If
+
+    BuildInvoiceExportFileName = SanitizeFileName(invoiceNumber & " - " & locationName)
+End Function
+
+Private Function ResolveExportWorksheet() As Worksheet
+    Dim callerName As String
+    Dim ws As Worksheet
+
+    On Error Resume Next
+    callerName = CStr(Application.Caller)
+    On Error GoTo 0
+
+    If Len(callerName) > 0 Then
+        For Each ws In ThisWorkbook.Worksheets
+            On Error Resume Next
+            If ws.Buttons(callerName).Name = callerName Then
+                Set ResolveExportWorksheet = ws
+                On Error GoTo 0
+                Exit Function
+            End If
+            On Error GoTo 0
+        Next ws
+    End If
+
+    Set ResolveExportWorksheet = ActiveSheet
+End Function
+
+Private Function SanitizeFileName(ByVal rawFileName As String) As String
+    Dim invalidChars As Variant
+    Dim idx As Long
+    Dim cleanedName As String
+
+    cleanedName = Trim$(rawFileName)
+    invalidChars = Array("\", "/", ":", "*", "?", Chr$(34), "<", ">", "|")
+
+    For idx = LBound(invalidChars) To UBound(invalidChars)
+        cleanedName = Replace(cleanedName, CStr(invalidChars(idx)), "-")
+    Next idx
+
+    Do While InStr(cleanedName, "  ") > 0
+        cleanedName = Replace(cleanedName, "  ", " ")
+    Loop
+
+    SanitizeFileName = Trim$(cleanedName)
+End Function
+
+Private Function NormalizeFolderPath(ByVal folderPath As String) As String
+    NormalizeFolderPath = Trim$(folderPath)
+    If Len(NormalizeFolderPath) = 0 Then Exit Function
+
+    If Right$(NormalizeFolderPath, 1) <> Application.PathSeparator Then
+        NormalizeFolderPath = NormalizeFolderPath & Application.PathSeparator
+    End If
+End Function
+
+Private Sub EnsureFolderExists(ByVal folderPath As String)
+    Dim parentPath As String
+
+    If Len(folderPath) = 0 Then
+        Err.Raise vbObjectError + 513, , "The export folder path is blank."
+    End If
+
+    If Right$(folderPath, 1) = Application.PathSeparator Then
+        folderPath = Left$(folderPath, Len(folderPath) - 1)
+    End If
+
+    If Len(folderPath) = 0 Or Dir$(folderPath, vbDirectory) <> "" Then Exit Sub
+
+    parentPath = Left$(folderPath, InStrRev(folderPath, Application.PathSeparator) - 1)
+    If Len(parentPath) > 0 And Dir$(parentPath, vbDirectory) = "" Then
+        EnsureFolderExists parentPath
+    End If
+
+    MkDir folderPath
+End Sub
+
+Private Sub DeleteFileIfExists(ByVal filePath As String)
+    If Len(Dir$(filePath, vbNormal)) > 0 Then
+        Kill filePath
+    End If
+End Sub
