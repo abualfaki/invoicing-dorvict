@@ -2,7 +2,7 @@ Option Explicit
 
 Private Const STARTING_INVOICE_NUMBER As Long = 55076
 Private Const MANUAL_INVOICE_DATE As String = "06/04/2026"
-Private Const MANUAL_PAYROLL_PERIOD As String = "For the Period: March 23 - April 05, 2026"
+Private Const MANUAL_PAYROLL_PERIOD As String = "For the Period: March 9 - March 22, 2026"
 Private Const COMPANY_LOGO_PATH As String = "C:\Users\Admin\OneDrive - Dorvict Home and Health Care Services\Documents\DORVICT FINANCE DEPT\logo\logo.jpg"
 
 Private nextInvoiceNumber As Long
@@ -10,8 +10,14 @@ Private nextInvoiceNumber As Long
 '========================
 ' Main entry
 '========================
-Sub ProcessAllReenaFoundationPayrolls_H12NoHBorder()
+Sub ProcessAllReenaFoundationPayrolls_H12NoHBorder_DateTimeSort()
     Const CLIENT_PATTERN As String = "REENA FOUNDATION"
+    Const COL_DATE As Long = 1
+    Const COL_START As Long = 4
+    Const COL_END As Long = 5
+    Const COL_RATE As Long = 6
+    Const COL_TOTAL As Long = 7
+    Const COL_DURATION As Long = 8
 
     Dim wsSource As Worksheet
     Dim lastRow As Long, colClient As Long
@@ -24,6 +30,8 @@ Sub ProcessAllReenaFoundationPayrolls_H12NoHBorder()
     Set wsSource = ActiveSheet
     colClient = 3
     lastRow = wsSource.Cells(wsSource.Rows.Count, colClient).End(xlUp).Row
+
+    PrepareSourceSheetForInvoiceProcessing wsSource, 2, lastRow, COL_DATE, COL_START, COL_END, COL_RATE, COL_TOTAL, COL_DURATION
 
     For rowIdx = 2 To lastRow
         rawClient = NormalizeClientName(CStr(wsSource.Cells(rowIdx, colClient).value))
@@ -64,7 +72,8 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
     Dim colDate As Long, colName As Long, colClient As Long
     Dim colStart As Long, colEnd As Long, colRate As Long
     Dim colTotal As Long, colDuration As Long, colUnit As Long, colONS As Long
-    Dim colHelper As Long, colSortKey As Long
+    Dim colHelper As Long, colSortDate As Long, colSortTime As Long
+    Dim colSortHours As Long, colShiftSequence As Long
     Dim i As Long
 
     lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
@@ -105,7 +114,7 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
     wsDest.Columns(colDate).NumberFormat = "dd/mm/yyyy"
 
     '========================
-    ' Build output rows
+    ' Build output rows from source order
     '========================
     For i = 2 To lastRow
         If NormalizeClientName(CStr(wsSource.Cells(i, colClient).value)) = targetClient Then
@@ -115,10 +124,12 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
 
             If isONS Then
                 Dim originalEnd As Variant
-                originalEnd = wsSource.Cells(i, colEnd).value
+                Dim originalShiftDate As Variant
+                originalEnd = NormalizeTimeValue(wsSource.Cells(i, colEnd).value)
+                originalShiftDate = NormalizeDate(wsSource.Cells(i, colDate).value)
 
                 wsDest.Rows(destRow).value = wsSource.Rows(i).value
-                wsDest.Cells(destRow, colDate).value = NormalizeDate(wsSource.Cells(i, colDate).value)
+                wsDest.Cells(destRow, colDate).value = originalShiftDate
                 wsDest.Cells(destRow, colStart).value = TimeValue("11:00:00 PM")
                 wsDest.Cells(destRow, colEnd).value = TimeValue("6:00:00 AM")
                 wsDest.Cells(destRow, colDuration).value = 1
@@ -128,7 +139,7 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
                 destRow = destRow + 1
 
                 wsDest.Rows(destRow).value = wsSource.Rows(i).value
-                wsDest.Cells(destRow, colDate).value = NormalizeDate(wsSource.Cells(i, colDate).value)
+                wsDest.Cells(destRow, colDate).value = originalShiftDate
                 wsDest.Cells(destRow, colStart).value = TimeValue("6:00:00 AM")
                 wsDest.Cells(destRow, colEnd).value = originalEnd
 
@@ -154,12 +165,17 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
                 destRow = destRow + 1
 
             Else
+                Dim normalizedShiftDate As Variant
+                normalizedShiftDate = NormalizeDate(wsSource.Cells(i, colDate).value)
+
                 wsDest.Rows(destRow).value = wsSource.Rows(i).value
-                wsDest.Cells(destRow, colDate).value = NormalizeDate(wsSource.Cells(i, colDate).value)
+                wsDest.Cells(destRow, colDate).value = normalizedShiftDate
 
                 Dim startTime As Variant, endTime As Variant, duration As Double
-                startTime = wsSource.Cells(i, colStart).value
-                endTime = wsSource.Cells(i, colEnd).value
+                startTime = NormalizeTimeValue(wsSource.Cells(i, colStart).value)
+                endTime = NormalizeTimeValue(wsSource.Cells(i, colEnd).value)
+                wsDest.Cells(destRow, colStart).value = startTime
+                wsDest.Cells(destRow, colEnd).value = endTime
 
                 If endTime < startTime Then
                     duration = (endTime + 1) - startTime
@@ -185,13 +201,22 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
         wsDest.Cells(i, colName).value = Replace(CStr(wsDest.Cells(i, colName).value), "@", "")
     Next i
 
-    ' Helper columns for grouping and sorting
+    ' Helper columns for grouping and a post-build ordering pass
     colHelper = lastCol + 1
-    colSortKey = lastCol + 2
+    colSortDate = lastCol + 2
+    colSortTime = lastCol + 3
+    colSortHours = lastCol + 4
+    colShiftSequence = lastCol + 5
 
     For i = TABLE_HEADER_ROW + 1 To destRow - 1
         Dim unitValue As String
+        Dim isFollowingONSRow As Boolean
         unitValue = CStr(wsDest.Cells(i, colUnit).value)
+        isFollowingONSRow = False
+
+        If unitValue = "" And i > TABLE_HEADER_ROW + 1 Then
+            isFollowingONSRow = (InStr(1, CStr(wsDest.Cells(i - 1, colUnit).value), "ONS", vbTextCompare) > 0)
+        End If
 
         If unitValue <> "" Then
             wsDest.Cells(i, colHelper).value = Replace(unitValue, " - ONS", "")
@@ -199,30 +224,22 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
             wsDest.Cells(i, colHelper).value = wsDest.Cells(i - 1, colHelper).value
         End If
 
-        Dim startVal As Variant
-        startVal = wsDest.Cells(i, colStart).value
-        If IsDate(startVal) Then
-            wsDest.Cells(i, colSortKey).value = CDbl(startVal)
+        If isFollowingONSRow Then
+            wsDest.Cells(i, colSortDate).value = wsDest.Cells(i - 1, colSortDate).value
+            wsDest.Cells(i, colSortTime).value = wsDest.Cells(i - 1, colSortTime).value
+            wsDest.Cells(i, colSortHours).value = GetSortHoursValue(wsDest.Cells(i - 1, colDuration).value) + _
+                                                 GetSortHoursValue(wsDest.Cells(i, colDuration).value)
+            wsDest.Cells(i, colShiftSequence).value = 2
+            wsDest.Cells(i - 1, colSortHours).value = wsDest.Cells(i, colSortHours).value
         Else
-            wsDest.Cells(i, colSortKey).value = 0
-        End If
-
-        If InStr(1, unitValue, "ONS", vbTextCompare) > 0 Then
-            wsDest.Cells(i, colSortKey).value = wsDest.Cells(i, colSortKey).value - 1
+            wsDest.Cells(i, colSortDate).value = GetSortDateValue(wsDest.Cells(i, colDate).value)
+            wsDest.Cells(i, colSortTime).value = GetSortTimeValue(wsDest.Cells(i, colStart).value)
+            wsDest.Cells(i, colSortHours).value = GetSortHoursValue(wsDest.Cells(i, colDuration).value)
+            wsDest.Cells(i, colShiftSequence).value = 1
         End If
     Next i
 
-    ' Sort by unit, date, adjusted start time, then caregiver name
-    With wsDest.Sort
-        .SortFields.Clear
-        .SortFields.Add Key:=wsDest.Columns(colHelper), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
-        .SortFields.Add Key:=wsDest.Columns(colDate), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
-        .SortFields.Add Key:=wsDest.Columns(colSortKey), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
-        .SortFields.Add Key:=wsDest.Columns(colName), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
-        .SetRange wsDest.Range(wsDest.Cells(TABLE_HEADER_ROW + 1, 1), wsDest.Cells(destRow - 1, colSortKey))
-        .Header = xlNo
-        .Apply
-    End With
+    ApplyPostBuildOrdering wsDest, TABLE_HEADER_ROW + 1, destRow - 1, colHelper, colSortDate, colSortTime, colSortHours, colName, colShiftSequence
 
     ' Header row at row 13
     wsDest.Rows(TABLE_HEADER_ROW).value = wsDest.Rows(1).value
@@ -242,6 +259,7 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
         .Borders.Weight = xlMedium
     End With
 
+    wsDest.Range(wsDest.Cells(TABLE_HEADER_ROW + 1, colDate), wsDest.Cells(destRow - 1, colDate)).NumberFormat = "dd/mm/yyyy"
     wsDest.Range(wsDest.Cells(TABLE_HEADER_ROW + 1, colStart), wsDest.Cells(destRow - 1, colEnd)).NumberFormat = "h:mm:ss AM/PM"
 
     wsDest.Columns(colRate).NumberFormat = "0.00"
@@ -294,7 +312,10 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
     wsDest.Rows(7).RowHeight = 34.5
 
     ' Cleanup + widths
-    wsDest.Columns(colSortKey).Delete
+    wsDest.Columns(colShiftSequence).Delete
+    wsDest.Columns(colSortHours).Delete
+    wsDest.Columns(colSortTime).Delete
+    wsDest.Columns(colSortDate).Delete
     wsDest.Columns(colHelper).Delete
     ApplyFixedColumnWidths wsDest
 
@@ -704,16 +725,268 @@ Private Function NormalizeClientName(ByVal rawClient As String) As String
     NormalizeClientName = Trim$(normalized)
 End Function
 
+Private Sub PrepareSourceSheetForInvoiceProcessing(ByVal ws As Worksheet, ByVal firstDataRow As Long, ByVal lastDataRow As Long, _
+    ByVal colDate As Long, ByVal colStart As Long, ByVal colEnd As Long, ByVal colRate As Long, _
+    ByVal colTotal As Long, ByVal colDuration As Long)
+
+    Dim rowNumber As Long
+    Dim parsedDate As Date
+    Dim parsedTime As Double
+    Dim parsedNumber As Double
+    Dim rawDateText As String
+
+    If lastDataRow < firstDataRow Then Exit Sub
+
+    For rowNumber = firstDataRow To lastDataRow
+        rawDateText = Trim$(ws.Cells(rowNumber, colDate).Text)
+
+        If rawDateText <> "" Then
+            If TryParseExcelDate(rawDateText, parsedDate) Then
+                ws.Cells(rowNumber, colDate).value = parsedDate
+            End If
+        ElseIf TryParseExcelDate(ws.Cells(rowNumber, colDate).value, parsedDate) Then
+            ws.Cells(rowNumber, colDate).value = parsedDate
+        End If
+
+        If TryParseExcelTime(ws.Cells(rowNumber, colStart).value, parsedTime) Then
+            ws.Cells(rowNumber, colStart).value = parsedTime
+        End If
+
+        If TryParseExcelTime(ws.Cells(rowNumber, colEnd).value, parsedTime) Then
+            ws.Cells(rowNumber, colEnd).value = parsedTime
+        End If
+
+        If TryParseDecimalValue(ws.Cells(rowNumber, colRate).value, parsedNumber) Then
+            ws.Cells(rowNumber, colRate).value = parsedNumber
+        End If
+
+        If TryParseDecimalValue(ws.Cells(rowNumber, colTotal).value, parsedNumber) Then
+            ws.Cells(rowNumber, colTotal).value = parsedNumber
+        End If
+
+        If TryParseDecimalValue(ws.Cells(rowNumber, colDuration).value, parsedNumber) Then
+            ws.Cells(rowNumber, colDuration).value = parsedNumber
+        End If
+    Next rowNumber
+
+    ws.Columns(colDate).NumberFormat = "dd/mm/yyyy"
+    ws.Range(ws.Cells(firstDataRow, colStart), ws.Cells(lastDataRow, colEnd)).NumberFormat = "h:mm:ss AM/PM"
+    ws.Columns(colRate).NumberFormat = "0.00"
+    ws.Columns(colTotal).NumberFormat = "#,##0.00"
+    ws.Columns(colDuration).NumberFormat = "0.00"
+End Sub
+
 '========================
 ' Date normalizer
 '========================
 Private Function NormalizeDate(val As Variant) As Variant
-    If IsDate(val) Then
-        NormalizeDate = DateValue(Format(val, "dd/mm/yyyy"))
+    Dim parsedDate As Date
+
+    If TryParseExcelDate(val, parsedDate) Then
+        NormalizeDate = parsedDate
     Else
         NormalizeDate = val
     End If
 End Function
+
+Private Function NormalizeTimeValue(ByVal val As Variant) As Variant
+    Dim parsedTime As Double
+
+    If TryParseExcelTime(val, parsedTime) Then
+        NormalizeTimeValue = parsedTime
+    Else
+        NormalizeTimeValue = val
+    End If
+End Function
+
+Private Function GetSortDateValue(ByVal shiftDate As Variant) As Double
+    Dim normalizedDate As Variant
+
+    normalizedDate = NormalizeDate(shiftDate)
+
+    If IsDate(normalizedDate) Then
+        GetSortDateValue = CLng(CDate(normalizedDate))
+    Else
+        GetSortDateValue = 0
+    End If
+End Function
+
+Private Function GetSortTimeValue(ByVal shiftStart As Variant) As Double
+    Dim normalizedTime As Variant
+
+    normalizedTime = NormalizeTimeValue(shiftStart)
+
+    If IsNumeric(normalizedTime) Then
+        GetSortTimeValue = CDbl(normalizedTime)
+    ElseIf IsDate(normalizedTime) Then
+        GetSortTimeValue = CDbl(TimeValue(normalizedTime))
+    Else
+        GetSortTimeValue = 0
+    End If
+End Function
+
+Private Function TryParseExcelDate(ByVal val As Variant, ByRef parsedDate As Date) As Boolean
+    Dim cleanedValue As String
+    Dim dateParts() As String
+    Dim dayPart As Long
+    Dim monthPart As Long
+    Dim yearPart As Long
+    Dim coercedDate As Date
+    Dim ddmmyyyyDate As Date
+    Dim mmddyyyyDate As Date
+    Dim hasDdMmCandidate As Boolean
+    Dim hasMmDdCandidate As Boolean
+
+    If IsDate(val) And (VarType(val) = vbDate Or IsNumeric(val)) Then
+        coercedDate = CDate(val)
+        parsedDate = DateSerial(Year(coercedDate), Month(coercedDate), Day(coercedDate))
+        TryParseExcelDate = True
+        Exit Function
+    End If
+
+    cleanedValue = Trim$(CStr(val))
+    cleanedValue = Replace(cleanedValue, "-", "/")
+    cleanedValue = Replace(cleanedValue, ".", "/")
+    dateParts = Split(cleanedValue, "/")
+
+    If UBound(dateParts) = 2 Then
+        If IsNumeric(dateParts(0)) And IsNumeric(dateParts(1)) And IsNumeric(dateParts(2)) Then
+            dayPart = CLng(dateParts(0))
+            monthPart = CLng(dateParts(1))
+            yearPart = CLng(dateParts(2))
+
+            If yearPart < 100 Then yearPart = 2000 + yearPart
+
+            hasDdMmCandidate = TryBuildDate(yearPart, monthPart, dayPart, ddmmyyyyDate)
+            hasMmDdCandidate = TryBuildDate(yearPart, dayPart, monthPart, mmddyyyyDate)
+
+            If hasDdMmCandidate Or hasMmDdCandidate Then
+                parsedDate = ChooseBestParsedDate(ddmmyyyyDate, hasDdMmCandidate, mmddyyyyDate, hasMmDdCandidate)
+                TryParseExcelDate = True
+                Exit Function
+            End If
+        End If
+    End If
+
+    If IsDate(cleanedValue) Then
+        coercedDate = CDate(cleanedValue)
+        parsedDate = DateSerial(Year(coercedDate), Month(coercedDate), Day(coercedDate))
+        TryParseExcelDate = True
+    End If
+End Function
+
+Private Function TryBuildDate(ByVal yearPart As Long, ByVal monthPart As Long, ByVal dayPart As Long, ByRef builtDate As Date) As Boolean
+    On Error Resume Next
+    builtDate = DateSerial(yearPart, monthPart, dayPart)
+    TryBuildDate = (Err.Number = 0)
+    On Error GoTo 0
+End Function
+
+Private Function ChooseBestParsedDate(ByVal ddmmyyyyDate As Date, ByVal hasDdMmCandidate As Boolean, _
+    ByVal mmddyyyyDate As Date, ByVal hasMmDdCandidate As Boolean) As Date
+
+    Dim referenceDate As Variant
+
+    referenceDate = GetManualInvoiceDateValue()
+
+    If hasDdMmCandidate And Not hasMmDdCandidate Then
+        ChooseBestParsedDate = ddmmyyyyDate
+        Exit Function
+    End If
+
+    If hasMmDdCandidate And Not hasDdMmCandidate Then
+        ChooseBestParsedDate = mmddyyyyDate
+        Exit Function
+    End If
+
+    If Not IsDate(referenceDate) Then
+        ChooseBestParsedDate = ddmmyyyyDate
+        Exit Function
+    End If
+
+    If Abs(CDbl(ddmmyyyyDate) - CDbl(CDate(referenceDate))) <= Abs(CDbl(mmddyyyyDate) - CDbl(CDate(referenceDate))) Then
+        ChooseBestParsedDate = ddmmyyyyDate
+    Else
+        ChooseBestParsedDate = mmddyyyyDate
+    End If
+End Function
+
+Private Function TryParseExcelTime(ByVal val As Variant, ByRef parsedTime As Double) As Boolean
+    Dim numericValue As Double
+
+    If IsDate(val) Then
+        parsedTime = CDbl(TimeValue(CDate(val)))
+        TryParseExcelTime = True
+        Exit Function
+    End If
+
+    If IsNumeric(val) Then
+        numericValue = CDbl(val)
+        parsedTime = numericValue - Fix(numericValue)
+        TryParseExcelTime = True
+        Exit Function
+    End If
+
+    If IsDate(Trim$(CStr(val))) Then
+        parsedTime = CDbl(TimeValue(Trim$(CStr(val))))
+        TryParseExcelTime = True
+    End If
+End Function
+
+Private Function TryParseDecimalValue(ByVal val As Variant, ByRef parsedNumber As Double) As Boolean
+    Dim cleanedValue As String
+
+    If IsNumeric(val) Then
+        parsedNumber = CDbl(val)
+        TryParseDecimalValue = True
+        Exit Function
+    End If
+
+    cleanedValue = Trim$(CStr(val))
+    cleanedValue = Replace(cleanedValue, ",", "")
+    cleanedValue = Replace(cleanedValue, "$", "")
+
+    If IsNumeric(cleanedValue) Then
+        parsedNumber = CDbl(cleanedValue)
+        TryParseDecimalValue = True
+    End If
+End Function
+
+Private Function GetSortHoursValue(ByVal shiftHours As Variant) As Double
+    If IsNumeric(shiftHours) Then
+        GetSortHoursValue = CDbl(shiftHours)
+    Else
+        GetSortHoursValue = 0
+    End If
+End Function
+
+Private Sub ApplyPostBuildOrdering(ByVal wsDest As Worksheet, ByVal firstDataRow As Long, ByVal lastDataRow As Long, _
+    ByVal colHelper As Long, ByVal colSortDate As Long, ByVal colSortTime As Long, ByVal colSortHours As Long, _
+    ByVal colName As Long, ByVal colShiftSequence As Long)
+
+    If lastDataRow < firstDataRow Then Exit Sub
+
+    With wsDest.Sort
+        .SortFields.Clear
+        .SortFields.Add Key:=wsDest.Range(wsDest.Cells(firstDataRow, colHelper), wsDest.Cells(lastDataRow, colHelper)), _
+            SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SortFields.Add Key:=wsDest.Range(wsDest.Cells(firstDataRow, colSortDate), wsDest.Cells(lastDataRow, colSortDate)), _
+            SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SortFields.Add Key:=wsDest.Range(wsDest.Cells(firstDataRow, colSortTime), wsDest.Cells(lastDataRow, colSortTime)), _
+            SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SortFields.Add Key:=wsDest.Range(wsDest.Cells(firstDataRow, colSortHours), wsDest.Cells(lastDataRow, colSortHours)), _
+            SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SortFields.Add Key:=wsDest.Range(wsDest.Cells(firstDataRow, colName), wsDest.Cells(lastDataRow, colName)), _
+            SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SortFields.Add Key:=wsDest.Range(wsDest.Cells(firstDataRow, colShiftSequence), wsDest.Cells(lastDataRow, colShiftSequence)), _
+            SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SetRange wsDest.Range(wsDest.Cells(firstDataRow, 1), wsDest.Cells(lastDataRow, colShiftSequence))
+        .Header = xlNo
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .Apply
+    End With
+End Sub
 
 '========================
 ' Collection helper

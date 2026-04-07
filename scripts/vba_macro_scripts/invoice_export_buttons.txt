@@ -80,8 +80,8 @@ Private Sub ExportInvoiceSheetAsPdf(ByVal ws As Worksheet)
     Dim fileBaseName As String
     Dim exportPath As String
     Dim fullFilePath As String
-    Dim excelButtonVisible As Boolean
-    Dim pdfButtonVisible As Boolean
+    Dim tempWorkbook As Workbook
+    Dim tempWorksheet As Worksheet
 
     fileBaseName = BuildInvoiceExportFileName(ws)
     If Len(fileBaseName) = 0 Then Exit Sub
@@ -92,31 +92,35 @@ Private Sub ExportInvoiceSheetAsPdf(ByVal ws As Worksheet)
 
     On Error GoTo CleanFail
     Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
 
     DeleteFileIfExists fullFilePath
 
-    CaptureButtonVisibility ws, EXCEL_BUTTON_NAME, excelButtonVisible
-    CaptureButtonVisibility ws, PDF_BUTTON_NAME, pdfButtonVisible
-    SetButtonVisibility ws, EXCEL_BUTTON_NAME, False
-    SetButtonVisibility ws, PDF_BUTTON_NAME, False
+    ws.Calculate
+    ws.Copy
+    Set tempWorkbook = ActiveWorkbook
+    Set tempWorksheet = tempWorkbook.Worksheets(1)
 
-    ws.ExportAsFixedFormat Type:=xlTypePDF, _
-                           Filename:=fullFilePath, _
-                           Quality:=xlQualityStandard, _
-                           IncludeDocProperties:=True, _
-                           IgnorePrintAreas:=False, _
-                           OpenAfterPublish:=False
+    RemoveInvoiceExportButtons tempWorksheet
+    PrepareWorksheetForPdfExport ws, tempWorksheet
 
-    SetButtonVisibility ws, EXCEL_BUTTON_NAME, excelButtonVisible
-    SetButtonVisibility ws, PDF_BUTTON_NAME, pdfButtonVisible
+    tempWorksheet.ExportAsFixedFormat Type:=xlTypePDF, _
+                                     Filename:=fullFilePath, _
+                                     Quality:=xlQualityStandard, _
+                                     IncludeDocProperties:=True, _
+                                     IgnorePrintAreas:=False, _
+                                     OpenAfterPublish:=False
+
+    tempWorkbook.Close SaveChanges:=False
+    Application.DisplayAlerts = True
     Application.ScreenUpdating = True
     MsgBox "PDF saved to:" & vbCrLf & fullFilePath, vbInformation
     Exit Sub
 
 CleanFail:
     On Error Resume Next
-    SetButtonVisibility ws, EXCEL_BUTTON_NAME, excelButtonVisible
-    SetButtonVisibility ws, PDF_BUTTON_NAME, pdfButtonVisible
+    If Not tempWorkbook Is Nothing Then tempWorkbook.Close SaveChanges:=False
+    Application.DisplayAlerts = True
     Application.ScreenUpdating = True
     MsgBox "PDF export failed: " & Err.Description, vbExclamation
 End Sub
@@ -155,6 +159,17 @@ Private Sub SetButtonVisibility(ByVal ws As Worksheet, ByVal buttonName As Strin
     On Error GoTo 0
 End Sub
 
+Private Sub PrepareWorksheetForPdfExport(ByVal sourceWorksheet As Worksheet, ByVal exportWorksheet As Worksheet)
+    Dim printAreaAddress As String
+
+    printAreaAddress = ResolveWorksheetPrintArea(sourceWorksheet)
+    If Len(printAreaAddress) > 0 Then
+        exportWorksheet.PageSetup.PrintArea = printAreaAddress
+    End If
+
+    exportWorksheet.Calculate
+End Sub
+
 Private Function BuildInvoiceExportFileName(ByVal ws As Worksheet) As String
     Dim invoiceNumber As String
     Dim locationName As String
@@ -177,25 +192,30 @@ End Function
 
 Private Function ResolveExportWorksheet() As Worksheet
     Dim callerName As String
-    Dim ws As Worksheet
 
     On Error Resume Next
     callerName = CStr(Application.Caller)
     On Error GoTo 0
 
-    If Len(callerName) > 0 Then
-        For Each ws In ThisWorkbook.Worksheets
-            On Error Resume Next
-            If ws.Buttons(callerName).Name = callerName Then
-                Set ResolveExportWorksheet = ws
-                On Error GoTo 0
-                Exit Function
-            End If
-            On Error GoTo 0
-        Next ws
+    If TypeOf ActiveSheet Is Worksheet Then
+        If Len(callerName) = 0 Then
+            Set ResolveExportWorksheet = ActiveSheet
+            Exit Function
+        End If
+
+        If WorksheetContainsButton(ActiveSheet, callerName) Then
+            Set ResolveExportWorksheet = ActiveSheet
+            Exit Function
+        End If
     End If
 
     Set ResolveExportWorksheet = ActiveSheet
+End Function
+
+Private Function WorksheetContainsButton(ByVal ws As Worksheet, ByVal buttonName As String) As Boolean
+    On Error Resume Next
+    WorksheetContainsButton = (ws.Buttons(buttonName).Name = buttonName)
+    On Error GoTo 0
 End Function
 
 Private Function SanitizeFileName(ByVal rawFileName As String) As String
@@ -224,6 +244,49 @@ Private Function NormalizeFolderPath(ByVal folderPath As String) As String
     If Right$(NormalizeFolderPath, 1) <> Application.PathSeparator Then
         NormalizeFolderPath = NormalizeFolderPath & Application.PathSeparator
     End If
+End Function
+
+Private Function ResolveWorksheetPrintArea(ByVal ws As Worksheet) As String
+    Dim existingPrintArea As String
+    Dim usedContentRange As Range
+
+    On Error Resume Next
+    existingPrintArea = Trim$(ws.PageSetup.PrintArea)
+    On Error GoTo 0
+
+    If Len(existingPrintArea) > 0 Then
+        ResolveWorksheetPrintArea = existingPrintArea
+        Exit Function
+    End If
+
+    Set usedContentRange = GetUsedContentRange(ws)
+    If Not usedContentRange Is Nothing Then
+        ResolveWorksheetPrintArea = usedContentRange.Address
+    End If
+End Function
+
+Private Function GetUsedContentRange(ByVal ws As Worksheet) As Range
+    Dim firstRowCell As Range
+    Dim lastRowCell As Range
+    Dim firstColumnCell As Range
+    Dim lastColumnCell As Range
+
+    On Error Resume Next
+    Set firstRowCell = ws.Cells.Find(What:="*", After:=ws.Cells(ws.Rows.Count, ws.Columns.Count), LookIn:=xlFormulas, _
+                                     LookAt:=xlPart, SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)
+    Set lastRowCell = ws.Cells.Find(What:="*", After:=ws.Cells(1, 1), LookIn:=xlFormulas, _
+                                    LookAt:=xlPart, SearchOrder:=xlByRows, SearchDirection:=xlPrevious, MatchCase:=False)
+    Set firstColumnCell = ws.Cells.Find(What:="*", After:=ws.Cells(ws.Rows.Count, ws.Columns.Count), LookIn:=xlFormulas, _
+                                        LookAt:=xlPart, SearchOrder:=xlByColumns, SearchDirection:=xlNext, MatchCase:=False)
+    Set lastColumnCell = ws.Cells.Find(What:="*", After:=ws.Cells(1, 1), LookIn:=xlFormulas, _
+                                       LookAt:=xlPart, SearchOrder:=xlByColumns, SearchDirection:=xlPrevious, MatchCase:=False)
+    On Error GoTo 0
+
+    If firstRowCell Is Nothing Or lastRowCell Is Nothing Then Exit Function
+    If firstColumnCell Is Nothing Or lastColumnCell Is Nothing Then Exit Function
+
+    Set GetUsedContentRange = ws.Range(ws.Cells(firstRowCell.Row, firstColumnCell.Column), _
+                                       ws.Cells(lastRowCell.Row, lastColumnCell.Column))
 End Function
 
 Private Sub EnsureFolderExists(ByVal folderPath As String)
