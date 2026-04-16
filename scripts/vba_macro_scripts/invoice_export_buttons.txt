@@ -1,7 +1,7 @@
 Option Explicit
 
-Private Const EXPORT_EXCEL_PATH As String = "C:\Users\Admin\OneDrive - Dorvict Home and Health Care Services\Documents\dorvict_invoice_pipeline\exports\excel"
-Private Const EXPORT_PDF_PATH As String = "C:\Users\Admin\OneDrive - Dorvict Home and Health Care Services\Documents\dorvict_invoice_pipeline\exports\pdf"
+Private Const EXPORT_EXCEL_PATH As String = "C:\Users\Admin\OneDrive - Dorvict Home and Health Care Services\Documents\DORVICT FINANCE DEPT\Invoices\Toronto\2026\March 30 - April 12\excel"
+Private Const EXPORT_PDF_PATH As String = "C:\Users\Admin\OneDrive - Dorvict Home and Health Care Services\Documents\DORVICT FINANCE DEPT\Invoices\Toronto\2026\March 30 - April 12\pdfs"
 
 Private Const EXCEL_BUTTON_NAME As String = "btnSaveInvoiceAsExcel"
 Private Const PDF_BUTTON_NAME As String = "btnSaveInvoiceAsPdf"
@@ -131,6 +131,7 @@ End Sub
 Private Sub CreateInvoiceExportButton(ByVal ws As Worksheet, ByVal buttonName As String, ByVal captionText As String, ByVal macroName As String, ByVal leftPos As Double, ByVal topPos As Double)
     Dim buttonObject As Button
 
+    RemoveShapeByName ws, buttonName
     Set buttonObject = ws.Buttons.Add(leftPos, topPos, 120, 28)
 
     With buttonObject
@@ -141,9 +142,14 @@ Private Sub CreateInvoiceExportButton(ByVal ws As Worksheet, ByVal buttonName As
 End Sub
 
 Private Sub RemoveInvoiceExportButtons(ByVal ws As Worksheet)
+    RemoveShapeByName ws, EXCEL_BUTTON_NAME
+    RemoveShapeByName ws, PDF_BUTTON_NAME
+End Sub
+
+Private Sub RemoveShapeByName(ByVal ws As Worksheet, ByVal shapeName As String)
     On Error Resume Next
-    ws.Buttons(EXCEL_BUTTON_NAME).Delete
-    ws.Buttons(PDF_BUTTON_NAME).Delete
+    ws.Shapes(shapeName).Delete
+    ws.Buttons(shapeName).Delete
     On Error GoTo 0
 End Sub
 
@@ -175,7 +181,7 @@ Private Function BuildInvoiceExportFileName(ByVal ws As Worksheet) As String
     Dim locationName As String
 
     invoiceNumber = Trim$(CStr(ws.Range("G9").Text))
-    locationName = Trim$(CStr(ws.Range("A10").Text))
+    locationName = ResolveInvoiceLocationName(ws)
 
     If Len(invoiceNumber) = 0 Then
         MsgBox "Cell G9 is blank. Enter an invoice number before exporting.", vbExclamation
@@ -188,6 +194,26 @@ Private Function BuildInvoiceExportFileName(ByVal ws As Worksheet) As String
     End If
 
     BuildInvoiceExportFileName = SanitizeFileName(invoiceNumber & " - " & locationName)
+End Function
+
+Private Function ResolveInvoiceLocationName(ByVal ws As Worksheet) As String
+    Dim primaryValue As String
+    Dim fallbackValue As String
+
+    primaryValue = Trim$(CStr(ws.Range("A10").Text))
+    fallbackValue = Trim$(CStr(ws.Range("A9").Text))
+
+    If Len(primaryValue) > 0 And UCase$(primaryValue) <> "PAYROLL INVOICE" Then
+        ResolveInvoiceLocationName = primaryValue
+        Exit Function
+    End If
+
+    If Len(fallbackValue) > 0 And UCase$(fallbackValue) <> "PAYROLL INVOICE" Then
+        ResolveInvoiceLocationName = fallbackValue
+        Exit Function
+    End If
+
+    ResolveInvoiceLocationName = primaryValue
 End Function
 
 Private Function ResolveExportWorksheet() As Worksheet

@@ -10,7 +10,7 @@ Private nextInvoiceNumber As Long
 '========================
 ' Main entry
 '========================
-Sub ProcessAllNonReenaPayrolls()
+Sub ProcessAllNonReenaPayrolls_SheetNameAfterDash()
     Const EXCLUDED_PATTERN As String = "REENA"
     Const COL_DATE As Long = 1
     Const COL_START As Long = 4
@@ -34,7 +34,7 @@ Sub ProcessAllNonReenaPayrolls()
     PrepareSourceSheetForInvoiceProcessing wsSource, 2, lastRow, COL_DATE, COL_START, COL_END, COL_RATE, COL_TOTAL, COL_DURATION
 
     For rowIdx = 2 To lastRow
-        rawClient = NormalizeClientName(CStr(wsSource.Cells(rowIdx, colClient).value))
+        rawClient = NormalizeClientName(GetSafeTextValue(wsSource.Cells(rowIdx, colClient).Value))
         If Len(rawClient) > 0 Then
             If InStr(1, rawClient, EXCLUDED_PATTERN, vbTextCompare) = 0 Then
                 If Not CollectionContains(clientMap, rawClient) Then
@@ -93,7 +93,7 @@ Private Sub ProcessSingleClientNonReena(ByVal wsSource As Worksheet, ByVal targe
     colONS = 10
 
     Dim sheetName As String
-    sheetName = BuildSheetName(targetClient)
+    sheetName = BuildClientSheetName(targetClient)
 
     Dim companyName As String
     Dim itemDescription As String
@@ -118,39 +118,39 @@ Private Sub ProcessSingleClientNonReena(ByVal wsSource As Worksheet, ByVal targe
     wsDest.Columns(colDate).NumberFormat = "dd/mm/yyyy"
 
     For i = 2 To lastRow
-        If NormalizeClientName(CStr(wsSource.Cells(i, colClient).value)) = targetClient Then
+        If NormalizeClientName(GetSafeTextValue(wsSource.Cells(i, colClient).Value)) = targetClient Then
 
             Dim isONS As Boolean
-            isONS = (UCase$(Trim$(CStr(wsSource.Cells(i, colONS).value))) = "YES")
+            isONS = (UCase$(Trim$(GetSafeTextValue(wsSource.Cells(i, colONS).Value))) = "YES")
 
             If isONS Then
                 Dim originalEnd As Variant
                 Dim originalShiftDate As Variant
-                originalEnd = NormalizeTimeValue(wsSource.Cells(i, colEnd).value)
-                originalShiftDate = NormalizeDate(wsSource.Cells(i, colDate).value)
+                originalEnd = NormalizeTimeValue(wsSource.Cells(i, colEnd).Value)
+                originalShiftDate = NormalizeDate(wsSource.Cells(i, colDate).Value)
 
-                wsDest.Rows(destRow).value = wsSource.Rows(i).value
-                wsDest.Cells(destRow, colDate).value = originalShiftDate
-                wsDest.Cells(destRow, colStart).value = TimeValue("11:00:00 PM")
-                wsDest.Cells(destRow, colEnd).value = TimeValue("6:00:00 AM")
-                wsDest.Cells(destRow, colDuration).value = 1
-                wsDest.Cells(destRow, colClient).value = itemDescription
-                wsDest.Cells(destRow, colUnit).value = CStr(wsDest.Cells(destRow, colUnit).value) & " - ONS"
+                wsDest.Rows(destRow).Value = wsSource.Rows(i).Value
+                wsDest.Cells(destRow, colDate).Value = originalShiftDate
+                wsDest.Cells(destRow, colStart).Value = TimeValue("11:00:00 PM")
+                wsDest.Cells(destRow, colEnd).Value = TimeValue("6:00:00 AM")
+                wsDest.Cells(destRow, colDuration).Value = 1
+                wsDest.Cells(destRow, colClient).Value = itemDescription
+                wsDest.Cells(destRow, colUnit).Value = CStr(wsDest.Cells(destRow, colUnit).Value) & " - ONS"
                 wsDest.Cells(destRow, colTotal).Formula = "=ROUND(" & wsDest.Cells(destRow, colDuration).Address(False, False) & "*" & wsDest.Cells(destRow, colRate).Address(False, False) & ",2)"
                 destRow = destRow + 1
 
-                wsDest.Rows(destRow).value = wsSource.Rows(i).value
-                wsDest.Cells(destRow, colDate).value = originalShiftDate
-                wsDest.Cells(destRow, colStart).value = TimeValue("6:00:00 AM")
-                wsDest.Cells(destRow, colEnd).value = originalEnd
+                wsDest.Rows(destRow).Value = wsSource.Rows(i).Value
+                wsDest.Cells(destRow, colDate).Value = originalShiftDate
+                wsDest.Cells(destRow, colStart).Value = TimeValue("6:00:00 AM")
+                wsDest.Cells(destRow, colEnd).Value = originalEnd
 
                 Dim rate2 As Double
-                If InStr(1, UCase$(CStr(wsSource.Cells(i, colName).value)), "MEDS", vbTextCompare) > 0 Then
+                If InStr(1, UCase$(GetSafeTextValue(wsSource.Cells(i, colName).Value)), "MEDS", vbTextCompare) > 0 Then
                     rate2 = 27.22
                 Else
                     rate2 = 26.88
                 End If
-                wsDest.Cells(destRow, colRate).value = rate2
+                wsDest.Cells(destRow, colRate).Value = rate2
 
                 Dim dur As Double
                 If IsDate(originalEnd) And originalEnd < TimeValue("6:00:00 AM") Then
@@ -158,34 +158,34 @@ Private Sub ProcessSingleClientNonReena(ByVal wsSource As Worksheet, ByVal targe
                 Else
                     dur = originalEnd - TimeValue("6:00:00 AM")
                 End If
-                wsDest.Cells(destRow, colDuration).value = Round(dur * 24, 2)
+                wsDest.Cells(destRow, colDuration).Value = Round(dur * 24, 2)
 
-                wsDest.Cells(destRow, colClient).value = itemDescription
-                wsDest.Cells(destRow, colUnit).value = ""
+                wsDest.Cells(destRow, colClient).Value = itemDescription
+                wsDest.Cells(destRow, colUnit).Value = ""
                 wsDest.Cells(destRow, colTotal).Formula = "=ROUND(" & wsDest.Cells(destRow, colDuration).Address(False, False) & "*" & wsDest.Cells(destRow, colRate).Address(False, False) & ",2)"
                 destRow = destRow + 1
 
             Else
                 Dim normalizedShiftDate As Variant
-                normalizedShiftDate = NormalizeDate(wsSource.Cells(i, colDate).value)
+                normalizedShiftDate = NormalizeDate(wsSource.Cells(i, colDate).Value)
 
-                wsDest.Rows(destRow).value = wsSource.Rows(i).value
-                wsDest.Cells(destRow, colDate).value = normalizedShiftDate
+                wsDest.Rows(destRow).Value = wsSource.Rows(i).Value
+                wsDest.Cells(destRow, colDate).Value = normalizedShiftDate
 
                 Dim startTime As Variant, endTime As Variant, duration As Double
-                startTime = NormalizeTimeValue(wsSource.Cells(i, colStart).value)
-                endTime = NormalizeTimeValue(wsSource.Cells(i, colEnd).value)
-                wsDest.Cells(destRow, colStart).value = startTime
-                wsDest.Cells(destRow, colEnd).value = endTime
+                startTime = NormalizeTimeValue(wsSource.Cells(i, colStart).Value)
+                endTime = NormalizeTimeValue(wsSource.Cells(i, colEnd).Value)
+                wsDest.Cells(destRow, colStart).Value = startTime
+                wsDest.Cells(destRow, colEnd).Value = endTime
 
                 If endTime < startTime Then
                     duration = (endTime + 1) - startTime
                 Else
                     duration = endTime - startTime
                 End If
-                wsDest.Cells(destRow, colDuration).value = Round(duration * 24, 2)
+                wsDest.Cells(destRow, colDuration).Value = Round(duration * 24, 2)
 
-                wsDest.Cells(destRow, colClient).value = itemDescription
+                wsDest.Cells(destRow, colClient).Value = itemDescription
                 wsDest.Cells(destRow, colTotal).Formula = "=ROUND(" & wsDest.Cells(destRow, colDuration).Address(False, False) & "*" & wsDest.Cells(destRow, colRate).Address(False, False) & ",2)"
                 destRow = destRow + 1
             End If
@@ -194,12 +194,12 @@ Private Sub ProcessSingleClientNonReena(ByVal wsSource As Worksheet, ByVal targe
 
     If destRow = TABLE_HEADER_ROW + 1 Then
         wsDest.Cells.Clear
-        wsDest.Name = sheetName & " (Empty)"
+        wsDest.Name = BuildSheetName(sheetName & " (Empty)")
         Exit Sub
     End If
 
     For i = TABLE_HEADER_ROW + 1 To destRow - 1
-        wsDest.Cells(i, colName).value = Replace(CStr(wsDest.Cells(i, colName).value), "@", "")
+        wsDest.Cells(i, colName).Value = Replace(CStr(wsDest.Cells(i, colName).Value), "@", "")
     Next i
 
     colHelper = lastCol + 1
@@ -211,44 +211,44 @@ Private Sub ProcessSingleClientNonReena(ByVal wsSource As Worksheet, ByVal targe
     For i = TABLE_HEADER_ROW + 1 To destRow - 1
         Dim unitValue As String
         Dim isFollowingONSRow As Boolean
-        unitValue = CStr(wsDest.Cells(i, colUnit).value)
+        unitValue = CStr(wsDest.Cells(i, colUnit).Value)
         isFollowingONSRow = False
 
         If unitValue = "" And i > TABLE_HEADER_ROW + 1 Then
-            isFollowingONSRow = (InStr(1, CStr(wsDest.Cells(i - 1, colUnit).value), "ONS", vbTextCompare) > 0)
+            isFollowingONSRow = (InStr(1, CStr(wsDest.Cells(i - 1, colUnit).Value), "ONS", vbTextCompare) > 0)
         End If
 
         If unitValue <> "" Then
-            wsDest.Cells(i, colHelper).value = Replace(unitValue, " - ONS", "")
+            wsDest.Cells(i, colHelper).Value = Replace(unitValue, " - ONS", "")
         ElseIf i > TABLE_HEADER_ROW + 1 Then
-            wsDest.Cells(i, colHelper).value = wsDest.Cells(i - 1, colHelper).value
+            wsDest.Cells(i, colHelper).Value = wsDest.Cells(i - 1, colHelper).Value
         End If
 
         If isFollowingONSRow Then
-            wsDest.Cells(i, colSortDate).value = wsDest.Cells(i - 1, colSortDate).value
-            wsDest.Cells(i, colSortTime).value = wsDest.Cells(i - 1, colSortTime).value
-            wsDest.Cells(i, colSortHours).value = GetSortHoursValue(wsDest.Cells(i - 1, colDuration).value) + _
-                                                 GetSortHoursValue(wsDest.Cells(i, colDuration).value)
-            wsDest.Cells(i, colShiftSequence).value = 2
-            wsDest.Cells(i - 1, colSortHours).value = wsDest.Cells(i, colSortHours).value
+            wsDest.Cells(i, colSortDate).Value = wsDest.Cells(i - 1, colSortDate).Value
+            wsDest.Cells(i, colSortTime).Value = wsDest.Cells(i - 1, colSortTime).Value
+            wsDest.Cells(i, colSortHours).Value = GetSortHoursValue(wsDest.Cells(i - 1, colDuration).Value) + _
+                                                 GetSortHoursValue(wsDest.Cells(i, colDuration).Value)
+            wsDest.Cells(i, colShiftSequence).Value = 2
+            wsDest.Cells(i - 1, colSortHours).Value = wsDest.Cells(i, colSortHours).Value
         Else
-            wsDest.Cells(i, colSortDate).value = GetSortDateValue(wsDest.Cells(i, colDate).value)
-            wsDest.Cells(i, colSortTime).value = GetSortTimeValue(wsDest.Cells(i, colStart).value)
-            wsDest.Cells(i, colSortHours).value = GetSortHoursValue(wsDest.Cells(i, colDuration).value)
-            wsDest.Cells(i, colShiftSequence).value = 1
+            wsDest.Cells(i, colSortDate).Value = GetSortDateValue(wsDest.Cells(i, colDate).Value)
+            wsDest.Cells(i, colSortTime).Value = GetSortTimeValue(wsDest.Cells(i, colStart).Value)
+            wsDest.Cells(i, colSortHours).Value = GetSortHoursValue(wsDest.Cells(i, colDuration).Value)
+            wsDest.Cells(i, colShiftSequence).Value = 1
         End If
     Next i
 
     ApplyPostBuildOrdering wsDest, TABLE_HEADER_ROW + 1, destRow - 1, colHelper, colSortDate, colSortTime, colSortHours, colName, colShiftSequence
 
-    wsDest.Rows(TABLE_HEADER_ROW).value = wsDest.Rows(1).value
+    wsDest.Rows(TABLE_HEADER_ROW).Value = wsDest.Rows(1).Value
     wsDest.Rows(1).Clear
 
-    wsDest.Cells(TABLE_HEADER_ROW, colName).value = "Recorded by Name"
-    wsDest.Cells(TABLE_HEADER_ROW, colClient).value = "Item Description"
-    wsDest.Cells(TABLE_HEADER_ROW, colRate).value = "Rate"
-    wsDest.Cells(TABLE_HEADER_ROW, colTotal).value = "Amount"
-    wsDest.Cells(TABLE_HEADER_ROW, colUnit).value = "Code"
+    wsDest.Cells(TABLE_HEADER_ROW, colName).Value = "Recorded by Name"
+    wsDest.Cells(TABLE_HEADER_ROW, colClient).Value = "Item Description"
+    wsDest.Cells(TABLE_HEADER_ROW, colRate).Value = "Rate"
+    wsDest.Cells(TABLE_HEADER_ROW, colTotal).Value = "Amount"
+    wsDest.Cells(TABLE_HEADER_ROW, colUnit).Value = "Code"
 
     With wsDest.Range(wsDest.Cells(TABLE_HEADER_ROW, 1), wsDest.Cells(TABLE_HEADER_ROW, lastCol))
         .Font.Bold = True
@@ -279,16 +279,16 @@ Private Sub ProcessSingleClientNonReena(ByVal wsSource As Worksheet, ByVal targe
     Dim r As Long, startRow As Long
 
     r = TABLE_HEADER_ROW + 1
-    currentUnit = CStr(wsDest.Cells(r, colHelper).value)
+    currentUnit = CStr(wsDest.Cells(r, colHelper).Value)
     startRow = r
 
     Do While r < destRow
-        If CStr(wsDest.Cells(r, colHelper).value) = currentUnit Then
+        If CStr(wsDest.Cells(r, colHelper).Value) = currentUnit Then
             r = r + 1
         Else
             ApplyUnitSectionFormatting wsDest, startRow, r - 1, lastCol
             InsertSubtotalRow wsDest, r, startRow, colName, colDuration, colTotal, lastCol, currentUnit
-            currentUnit = CStr(wsDest.Cells(r + 1, colHelper).value)
+            currentUnit = CStr(wsDest.Cells(r + 1, colHelper).Value)
             startRow = r + 1
             destRow = destRow + 1
             r = r + 1
@@ -393,8 +393,8 @@ Private Sub ApplyInvoiceHeaderNonReena(ByVal ws As Worksheet, ByVal tableHeaderR
 
     ws.Rows("1:" & (tableHeaderRow - 1)).RowHeight = 18
 
-    ws.Range("A9").value = companyName
-    ws.Range("A10").value = itemDescription
+    ws.Range("A9").Value = companyName
+    ws.Range("A10").Value = itemDescription
 
     With ws.Rows("9:10").Font
         .Name = "Arial"
@@ -416,7 +416,7 @@ Private Sub ApplyInvoiceHeaderNonReena(ByVal ws As Worksheet, ByVal tableHeaderR
     With ws.Range("C5:D5")
         .UnMerge
         .Merge
-        .value = """Door to Caring Hands"""
+        .Value = """Door to Caring Hands"""
         .Font.Name = "Arial"
         .Font.Size = 14
         .Font.Bold = True
@@ -427,7 +427,7 @@ Private Sub ApplyInvoiceHeaderNonReena(ByVal ws As Worksheet, ByVal tableHeaderR
     With ws.Range("C7:D7")
         .UnMerge
         .Merge
-        .value = "INVOICE"
+        .Value = "INVOICE"
         .Font.Name = "Arial"
         .Font.Size = 24
         .Font.Bold = True
@@ -438,7 +438,7 @@ Private Sub ApplyInvoiceHeaderNonReena(ByVal ws As Worksheet, ByVal tableHeaderR
     With ws.Range("C8:D8")
         .UnMerge
         .Merge
-        .value = MANUAL_PAYROLL_PERIOD
+        .Value = MANUAL_PAYROLL_PERIOD
         .Font.Name = "Arial"
         .Font.Size = 14
         .Font.Bold = True
@@ -446,9 +446,9 @@ Private Sub ApplyInvoiceHeaderNonReena(ByVal ws As Worksheet, ByVal tableHeaderR
         .VerticalAlignment = xlCenter
     End With
 
-    ws.Range("F9").value = "Invoice #"
-    ws.Range("F10").value = "DATE:"
-    ws.Range("F11").value = "BUSINESS #: 891839433RT0001"
+    ws.Range("F9").Value = "Invoice #"
+    ws.Range("F10").Value = "DATE:"
+    ws.Range("F11").Value = "BUSINESS #: 891839433RT0001"
 
     With ws.Range("F9:F11")
         .Font.Name = "Arial"
@@ -464,11 +464,11 @@ Private Sub ApplyInvoiceHeaderNonReena(ByVal ws As Worksheet, ByVal tableHeaderR
         .Font.Bold = False
         .HorizontalAlignment = xlLeft
         .VerticalAlignment = xlCenter
-        .value = ""
+        .Value = ""
     End With
 
     With ws.Range("G9")
-        .value = invoiceNumber
+        .Value = invoiceNumber
         .NumberFormat = "0"
         .Font.Name = "Arial"
         .Font.Size = 14
@@ -478,7 +478,7 @@ Private Sub ApplyInvoiceHeaderNonReena(ByVal ws As Worksheet, ByVal tableHeaderR
     End With
 
     With ws.Range("G10")
-        .value = GetManualInvoiceDateValue()
+        .Value = GetManualInvoiceDateValue()
         .NumberFormat = "dd/mm/yyyy"
         .Font.Name = "Arial"
         .Font.Size = 14
@@ -515,17 +515,17 @@ Private Sub AddFinalTotalsBox_SumOnlySubtotalRows( _
     Set amtRange = ws.Range(ws.Cells(firstRow, colAmount), ws.Cells(lastRow, colAmount))
     Set durRange = ws.Range(ws.Cells(firstRow, colDuration), ws.Cells(lastRow, colDuration))
 
-    ws.Cells(startRow, COL_LABEL).value = "SUBTOTAL"
+    ws.Cells(startRow, COL_LABEL).Value = "SUBTOTAL"
     ws.Cells(startRow, COL_AMT).Formula = "=ROUND(SUMIF(" & criteriaRange.Address(False, False) & ",""Subtotal for Unit*""," & amtRange.Address(False, False) & "),2)"
     ws.Cells(startRow, COL_DUR).Formula = "=ROUND(SUMIF(" & criteriaRange.Address(False, False) & ",""Subtotal for Unit*""," & durRange.Address(False, False) & "),2)"
 
-    ws.Cells(startRow + 1, COL_LABEL).value = "HST 13%"
+    ws.Cells(startRow + 1, COL_LABEL).Value = "HST 13%"
     ws.Cells(startRow + 1, COL_AMT).Formula = "=ROUND(" & ws.Cells(startRow, COL_AMT).Address(False, False) & "*" & CStr(hstRate) & ",2)"
-    ws.Cells(startRow + 1, COL_DUR).value = ""
+    ws.Cells(startRow + 1, COL_DUR).Value = ""
 
-    ws.Cells(startRow + 2, COL_LABEL).value = "TOTAL"
+    ws.Cells(startRow + 2, COL_LABEL).Value = "TOTAL"
     ws.Cells(startRow + 2, COL_AMT).Formula = "=" & ws.Cells(startRow, COL_AMT).Address(False, False) & "+" & ws.Cells(startRow + 1, COL_AMT).Address(False, False)
-    ws.Cells(startRow + 2, COL_DUR).value = ""
+    ws.Cells(startRow + 2, COL_DUR).Value = ""
 
     Dim rngBox As Range
     Set rngBox = ws.Range(ws.Cells(startRow, COL_LABEL), ws.Cells(startRow + 2, COL_DUR))
@@ -577,32 +577,32 @@ Private Sub AddFooterCodesAndPaymentInfo(ByVal ws As Worksheet, ByVal totalsStar
     r = totalsStartRow + 3
     r = r + 1
 
-    ws.Range("A" & r).value = "CODES:"
-    ws.Range("B" & r).value = "ONA=OVERNIGHT AWAKE"
-    ws.Range("C" & r).value = "MC=MINIMUM CHARGE"
+    ws.Range("A" & r).Value = "CODES:"
+    ws.Range("B" & r).Value = "ONA=OVERNIGHT AWAKE"
+    ws.Range("C" & r).Value = "MC=MINIMUM CHARGE"
 
-    ws.Range("B" & (r + 1)).value = "ONS=OVERNIGHT SLEEP"
-    ws.Range("C" & (r + 1)).value = "TX=TAXI"
+    ws.Range("B" & (r + 1)).Value = "ONS=OVERNIGHT SLEEP"
+    ws.Range("C" & (r + 1)).Value = "TX=TAXI"
 
-    ws.Range("B" & (r + 2)).value = "STAT=STATUTORY HOLIDAY"
-    ws.Range("C" & (r + 2)).value = "DST- DAYLIGHT SAVINGS TIME"
+    ws.Range("B" & (r + 2)).Value = "STAT=STATUTORY HOLIDAY"
+    ws.Range("C" & (r + 2)).Value = "DST- DAYLIGHT SAVINGS TIME"
 
-    ws.Range("B" & (r + 3)).value = "SA=SUPERVISOR APPROVED"
-    ws.Range("C" & (r + 3)).value = "OT=OVERTIME"
+    ws.Range("B" & (r + 3)).Value = "SA=SUPERVISOR APPROVED"
+    ws.Range("C" & (r + 3)).Value = "OT=OVERTIME"
 
     Dim rPay As Long
     rPay = r + 5
 
-    ws.Range("A" & rPay).value = "PLEASE MAKE CHEQUE OR ELECTRONIC FUNDS TRANSFER (EFT) PAYABLE TO:"
-    ws.Range("A" & (rPay + 1)).value = "DORVICT RESOURCE & CONSULTING CENTRE INC."
-    ws.Range("A" & (rPay + 2)).value = "TEL: (416) 661-1740 Ext . 225"
-    ws.Range("A" & (rPay + 3)).value = "1275 Finch Ave. W. , Ste. 616, Toronto,On, M3J 0L5"
+    ws.Range("A" & rPay).Value = "PLEASE MAKE CHEQUE OR ELECTRONIC FUNDS TRANSFER (EFT) PAYABLE TO:"
+    ws.Range("A" & (rPay + 1)).Value = "DORVICT RESOURCE & CONSULTING CENTRE INC."
+    ws.Range("A" & (rPay + 2)).Value = "TEL: (416) 661-1740 Ext . 225"
+    ws.Range("A" & (rPay + 3)).Value = "1275 Finch Ave. W. , Ste. 616, Toronto,On, M3J 0L5"
 
-    ws.Range("C" & (rPay + 4)).value = "1.5% INTEREST CHARGE APPLIES TO BALANCES OVER 30 DAYS"
+    ws.Range("C" & (rPay + 4)).Value = "1.5% INTEREST CHARGE APPLIES TO BALANCES OVER 30 DAYS"
     ws.Range("C" & (rPay + 4)).Font.Bold = True
 
-    ws.Range("A" & (rPay + 5)).value = "ENQUIRIES:"
-    ws.Range("B" & (rPay + 5)).value = "accounting@dorvict.com"
+    ws.Range("A" & (rPay + 5)).Value = "ENQUIRIES:"
+    ws.Range("B" & (rPay + 5)).Value = "accounting@dorvict.com"
     ws.Range("B" & (rPay + 5)).Font.Underline = xlUnderlineStyleSingle
     ws.Range("B" & (rPay + 5)).Font.Bold = True
 
@@ -666,7 +666,7 @@ Private Sub InsertSubtotalRow(ws As Worksheet, insertRow As Long, startRow As Lo
     colName As Long, colDuration As Long, colTotal As Long, lastCol As Long, currentUnit As String)
 
     ws.Rows(insertRow).Insert Shift:=xlDown
-    ws.Cells(insertRow, colName).value = "Subtotal for Unit " & currentUnit
+    ws.Cells(insertRow, colName).Value = "Subtotal for Unit " & currentUnit
     ws.Cells(insertRow, colDuration).Formula = "=SUM(" & ws.Range(ws.Cells(startRow, colDuration), ws.Cells(insertRow - 1, colDuration)).Address(False, False) & ")"
     ws.Cells(insertRow, colTotal).Formula = "=SUM(" & ws.Range(ws.Cells(startRow, colTotal), ws.Cells(insertRow - 1, colTotal)).Address(False, False) & ")"
     ws.Rows(insertRow).Font.Bold = True
@@ -701,6 +701,15 @@ Private Function GetCompanyName(ByVal fullClient As String) As String
     End If
 End Function
 
+Private Function BuildClientSheetName(ByVal fullClient As String) As String
+    Dim clientSuffix As String
+
+    clientSuffix = Trim$(GetDisplayClientName(fullClient))
+    If clientSuffix = "" Then clientSuffix = "Unnamed Client"
+
+    BuildClientSheetName = BuildSheetName(clientSuffix)
+End Function
+
 '========================
 ' Sheet name sanitizer
 '========================
@@ -731,6 +740,14 @@ Private Function NormalizeClientName(ByVal rawClient As String) As String
     NormalizeClientName = Trim$(normalized)
 End Function
 
+Private Function GetSafeTextValue(ByVal val As Variant) As String
+    If IsError(val) Then Exit Function
+    If IsNull(val) Then Exit Function
+    If IsEmpty(val) Then Exit Function
+
+    GetSafeTextValue = Trim$(CStr(val))
+End Function
+
 Private Sub PrepareSourceSheetForInvoiceProcessing(ByVal ws As Worksheet, ByVal firstDataRow As Long, ByVal lastDataRow As Long, _
     ByVal colDate As Long, ByVal colStart As Long, ByVal colEnd As Long, ByVal colRate As Long, _
     ByVal colTotal As Long, ByVal colDuration As Long)
@@ -748,30 +765,30 @@ Private Sub PrepareSourceSheetForInvoiceProcessing(ByVal ws As Worksheet, ByVal 
 
         If rawDateText <> "" Then
             If TryParseExcelDate(rawDateText, parsedDate) Then
-                ws.Cells(rowNumber, colDate).value = parsedDate
+                ws.Cells(rowNumber, colDate).Value = parsedDate
             End If
-        ElseIf TryParseExcelDate(ws.Cells(rowNumber, colDate).value, parsedDate) Then
-            ws.Cells(rowNumber, colDate).value = parsedDate
+        ElseIf TryParseExcelDate(ws.Cells(rowNumber, colDate).Value, parsedDate) Then
+            ws.Cells(rowNumber, colDate).Value = parsedDate
         End If
 
-        If TryParseExcelTime(ws.Cells(rowNumber, colStart).value, parsedTime) Then
-            ws.Cells(rowNumber, colStart).value = parsedTime
+        If TryParseExcelTime(ws.Cells(rowNumber, colStart).Value, parsedTime) Then
+            ws.Cells(rowNumber, colStart).Value = parsedTime
         End If
 
-        If TryParseExcelTime(ws.Cells(rowNumber, colEnd).value, parsedTime) Then
-            ws.Cells(rowNumber, colEnd).value = parsedTime
+        If TryParseExcelTime(ws.Cells(rowNumber, colEnd).Value, parsedTime) Then
+            ws.Cells(rowNumber, colEnd).Value = parsedTime
         End If
 
-        If TryParseDecimalValue(ws.Cells(rowNumber, colRate).value, parsedNumber) Then
-            ws.Cells(rowNumber, colRate).value = parsedNumber
+        If TryParseDecimalValue(ws.Cells(rowNumber, colRate).Value, parsedNumber) Then
+            ws.Cells(rowNumber, colRate).Value = parsedNumber
         End If
 
-        If TryParseDecimalValue(ws.Cells(rowNumber, colTotal).value, parsedNumber) Then
-            ws.Cells(rowNumber, colTotal).value = parsedNumber
+        If TryParseDecimalValue(ws.Cells(rowNumber, colTotal).Value, parsedNumber) Then
+            ws.Cells(rowNumber, colTotal).Value = parsedNumber
         End If
 
-        If TryParseDecimalValue(ws.Cells(rowNumber, colDuration).value, parsedNumber) Then
-            ws.Cells(rowNumber, colDuration).value = parsedNumber
+        If TryParseDecimalValue(ws.Cells(rowNumber, colDuration).Value, parsedNumber) Then
+            ws.Cells(rowNumber, colDuration).Value = parsedNumber
         End If
     Next rowNumber
 
@@ -788,6 +805,11 @@ End Sub
 Private Function NormalizeDate(ByVal val As Variant) As Variant
     Dim parsedDate As Date
 
+    If IsError(val) Then
+        NormalizeDate = ""
+        Exit Function
+    End If
+
     If TryParseExcelDate(val, parsedDate) Then
         NormalizeDate = parsedDate
     Else
@@ -797,6 +819,11 @@ End Function
 
 Private Function NormalizeTimeValue(ByVal val As Variant) As Variant
     Dim parsedTime As Double
+
+    If IsError(val) Then
+        NormalizeTimeValue = 0
+        Exit Function
+    End If
 
     If TryParseExcelTime(val, parsedTime) Then
         NormalizeTimeValue = parsedTime
@@ -842,6 +869,8 @@ Private Function TryParseExcelDate(ByVal val As Variant, ByRef parsedDate As Dat
     Dim mmddyyyyDate As Date
     Dim hasDdMmCandidate As Boolean
     Dim hasMmDdCandidate As Boolean
+
+    If IsError(val) Or IsNull(val) Or IsEmpty(val) Then Exit Function
 
     If IsDate(val) And (VarType(val) = vbDate Or IsNumeric(val)) Then
         coercedDate = CDate(val)
@@ -920,6 +949,8 @@ End Function
 Private Function TryParseExcelTime(ByVal val As Variant, ByRef parsedTime As Double) As Boolean
     Dim numericValue As Double
 
+    If IsError(val) Or IsNull(val) Or IsEmpty(val) Then Exit Function
+
     If IsDate(val) Then
         parsedTime = CDbl(TimeValue(CDate(val)))
         TryParseExcelTime = True
@@ -941,6 +972,8 @@ End Function
 
 Private Function TryParseDecimalValue(ByVal val As Variant, ByRef parsedNumber As Double) As Boolean
     Dim cleanedValue As String
+
+    If IsError(val) Or IsNull(val) Or IsEmpty(val) Then Exit Function
 
     If IsNumeric(val) Then
         parsedNumber = CDbl(val)
@@ -1065,7 +1098,7 @@ Private Sub ReorderSheetsAlphabetically(ByVal sortedClients As Variant)
     Dim wsTarget As Worksheet
 
     On Error Resume Next
-    Set wsTarget = ThisWorkbook.Worksheets(BuildSheetName(CStr(sortedClients(LBound(sortedClients)))))
+    Set wsTarget = ThisWorkbook.Worksheets(BuildClientSheetName(CStr(sortedClients(LBound(sortedClients)))))
     On Error GoTo 0
 
     If wsTarget Is Nothing Then Exit Sub
@@ -1073,11 +1106,11 @@ Private Sub ReorderSheetsAlphabetically(ByVal sortedClients As Variant)
 
     For i = LBound(sortedClients) + 1 To UBound(sortedClients)
         On Error Resume Next
-        Set wsTarget = ThisWorkbook.Worksheets(BuildSheetName(CStr(sortedClients(i))))
+        Set wsTarget = ThisWorkbook.Worksheets(BuildClientSheetName(CStr(sortedClients(i))))
         On Error GoTo 0
 
         If Not wsTarget Is Nothing Then
-            wsTarget.Move After:=ThisWorkbook.Worksheets(BuildSheetName(CStr(sortedClients(i - 1))))
+            wsTarget.Move After:=ThisWorkbook.Worksheets(BuildClientSheetName(CStr(sortedClients(i - 1))))
         End If
 
         Set wsTarget = Nothing
