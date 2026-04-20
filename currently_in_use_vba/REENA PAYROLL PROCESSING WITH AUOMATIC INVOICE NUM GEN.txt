@@ -700,7 +700,8 @@ End Function
 '========================
 Private Function BuildSheetName(ByVal fullClient As String) As String
     Dim sanitized As String
-    sanitized = Replace(fullClient, ":", "-")
+    sanitized = Trim$(GetDisplayClientName(fullClient))
+    sanitized = Replace(sanitized, ":", "-")
     sanitized = Replace(sanitized, "/", "-")
     sanitized = Replace(sanitized, "\", "-")
     sanitized = Replace(sanitized, "?", "-")
@@ -832,10 +833,6 @@ Private Function TryParseExcelDate(ByVal val As Variant, ByRef parsedDate As Dat
     Dim monthPart As Long
     Dim yearPart As Long
     Dim coercedDate As Date
-    Dim ddmmyyyyDate As Date
-    Dim mmddyyyyDate As Date
-    Dim hasDdMmCandidate As Boolean
-    Dim hasMmDdCandidate As Boolean
 
     If IsDate(val) And (VarType(val) = vbDate Or IsNumeric(val)) Then
         coercedDate = CDate(val)
@@ -857,18 +854,16 @@ Private Function TryParseExcelDate(ByVal val As Variant, ByRef parsedDate As Dat
 
             If yearPart < 100 Then yearPart = 2000 + yearPart
 
-            hasDdMmCandidate = TryBuildDate(yearPart, monthPart, dayPart, ddmmyyyyDate)
-            hasMmDdCandidate = TryBuildDate(yearPart, dayPart, monthPart, mmddyyyyDate)
-
-            If hasDdMmCandidate Or hasMmDdCandidate Then
-                parsedDate = ChooseBestParsedDate(ddmmyyyyDate, hasDdMmCandidate, mmddyyyyDate, hasMmDdCandidate)
+            If TryBuildDate(yearPart, monthPart, dayPart, parsedDate) Then
                 TryParseExcelDate = True
                 Exit Function
             End If
+
+            Exit Function
         End If
     End If
 
-    If IsDate(cleanedValue) Then
+    If InStr(cleanedValue, "/") = 0 And IsDate(cleanedValue) Then
         coercedDate = CDate(cleanedValue)
         parsedDate = DateSerial(Year(coercedDate), Month(coercedDate), Day(coercedDate))
         TryParseExcelDate = True
