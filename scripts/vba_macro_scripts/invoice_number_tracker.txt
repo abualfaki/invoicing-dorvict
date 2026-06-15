@@ -1,0 +1,357 @@
+Option Explicit
+
+Private Const TRACKER_SHEET_NAME As String = "invoice tracker"
+Private Const TABLE_HEADER_ROW As Long = 13
+Private Const FIRST_DATA_ROW As Long = 14
+Private Const PAYROLL_PERIOD_CELL As String = "C8"
+Private Const INVOICE_NUMBER_CELL As String = "G9"
+Private Const LOCATION_PREFIX_CELL As String = "A9"
+Private Const LOCATION_SUFFIX_CELL As String = "C14"
+Private Const LABEL_COLUMN As String = "F"
+Private Const PRIMARY_TOTAL_COLUMN As String = "G"
+Private Const SECONDARY_TOTAL_COLUMN As String = "H"
+Private Const INPUT_PAYROLL_PERIOD_START As String = ""
+Private Const INPUT_PAYROLL_PERIOD_END As String = ""
+
+Public Sub BuildInvoiceTrackerSheet()
+    Dim sourceSheetNames As Collection
+    Dim wsTracker As Worksheet
+    Dim payrollPeriodText As String
+    Dim payrollPeriodStart As Variant
+    Dim payrollPeriodEnd As Variant
+    Dim sheetName As Variant
+    Dim outputRow As Long
+
+    Set sourceSheetNames = GetInvoiceSourceSheetNames()
+    If sourceSheetNames.Count = 0 Then
+        MsgBox "No invoice sheets were found from the second tab onward.", vbInformation
+        Exit Sub
+    End If
+
+    payrollPeriodText = GetPayrollPeriodFromSheet(ThisWorkbook.Worksheets(CStr(sourceSheetNames(1))))
+
+    If Not ResolveConfiguredTrackerDate(INPUT_PAYROLL_PERIOD_START, BuildPayrollBoundaryDefault(payrollPeriodText, True), payrollPeriodStart, "payroll period start") Then Exit Sub
+    If Not ResolveConfiguredTrackerDate(INPUT_PAYROLL_PERIOD_END, BuildPayrollBoundaryDefault(payrollPeriodText, False), payrollPeriodEnd, "payroll period end") Then Exit Sub
+
+    Set wsTracker = GetOrCreateTrackerSheet()
+    WriteTrackerHeaders wsTracker
+
+    outputRow = 2
+    For Each sheetName In sourceSheetNames
+        AppendTrackerRow ThisWorkbook.Worksheets(CStr(sheetName)), wsTracker, outputRow, payrollPeriodStart, payrollPeriodEnd
+    Next sheetName
+
+    wsTracker.Columns.AutoFit
+    wsTracker.Activate
+
+    MsgBox CStr(outputRow - 2) & " invoice tracker row(s) created.", vbInformation
+End Sub
+
+Private Function GetInvoiceSourceSheetNames() As Collection
+    Dim sheetNames As New Collection
+    Dim sheetIndex As Long
+    Dim ws As Worksheet
+
+    For sheetIndex = 2 To ThisWorkbook.Worksheets.Count
+        Set ws = ThisWorkbook.Worksheets(sheetIndex)
+        If StrComp(ws.Name, TRACKER_SHEET_NAME, vbTextCompare) <> 0 Then
+            sheetNames.Add ws.Name
+        End If
+    Next sheetIndex
+
+    Set GetInvoiceSourceSheetNames = sheetNames
+End Function
+
+Private Function GetOrCreateTrackerSheet() As Worksheet
+    Dim wsTracker As Worksheet
+
+    On Error Resume Next
+    Set wsTracker = ThisWorkbook.Worksheets(TRACKER_SHEET_NAME)
+    On Error GoTo 0
+
+    If wsTracker Is Nothing Then
+        Set wsTracker = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        wsTracker.Name = TRACKER_SHEET_NAME
+    Else
+        wsTracker.Cells.Clear
+        wsTracker.Move After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count)
+    End If
+
+    Set GetOrCreateTrackerSheet = wsTracker
+End Function
+
+Private Sub WriteTrackerHeaders(ByVal wsTracker As Worksheet)
+    Dim headers As Variant
+    Dim colIndex As Long
+
+    headers = Array( _
+        "Payroll Period", _
+        "payroll_period_start", _
+        "payroll_period_end", _
+        "invoice_number", _
+        "location", _
+        "location_id", _
+        "main_client_id", _
+        "hours_billed", _
+        "subtotal", _
+        "grand_total")
+
+    For colIndex = LBound(headers) To UBound(headers)
+        wsTracker.Cells(1, colIndex + 1).Value = headers(colIndex)
+    Next colIndex
+
+    With wsTracker.Rows(1)
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+    End With
+
+    wsTracker.Columns(2).NumberFormat = "dd/mm/yyyy"
+    wsTracker.Columns(3).NumberFormat = "dd/mm/yyyy"
+    wsTracker.Columns(8).NumberFormat = "0.00"
+    wsTracker.Columns(9).NumberFormat = "0.00"
+    wsTracker.Columns(10).NumberFormat = "0.00"
+End Sub
+
+Private Sub AppendTrackerRow(ByVal wsSource As Worksheet, ByVal wsTracker As Worksheet, ByRef outputRow As Long, _
+    ByVal payrollPeriodStart As Variant, ByVal payrollPeriodEnd As Variant)
+
+    Dim payrollPeriodText As String
+    Dim invoiceNumber As Variant
+    Dim locationIdColumn As Long
+    Dim mainClientIdColumn As Long
+    Dim subtotalRow As Long
+    Dim totalRow As Long
+    Dim amountColumnLetter As String
+    Dim hoursColumnLetter As String
+
+    invoiceNumber = wsSource.Range(INVOICE_NUMBER_CELL).Value
+    If Trim$(CStr(invoiceNumber)) = "" Then Exit Sub
+
+    locationIdColumn = FindHeaderColumn(wsSource, "Client ID", 13)
+    mainClientIdColumn = FindHeaderColumn(wsSource, "Main client ID", 12)
+    subtotalRow = FindLabelRow(wsSource, "SUBTOTAL")
+    totalRow = FindLabelRow(wsSource, "TOTAL")
+
+    If subtotalRow = 0 Or totalRow = 0 Then Exit Sub
+
+    amountColumnLetter = ResolveAmountColumnLetter(wsSource, totalRow)
+    hoursColumnLetter = ResolveHoursColumnLetter(amountColumnLetter)
+
+    payrollPeriodText = GetPayrollPeriodFromSheet(wsSource)
+
+    wsTracker.Cells(outputRow, 1).Value = payrollPeriodText
+    wsTracker.Cells(outputRow, 2).Value = NormalizeTrackerValue(payrollPeriodStart)
+    wsTracker.Cells(outputRow, 3).Value = NormalizeTrackerValue(payrollPeriodEnd)
+    wsTracker.Cells(outputRow, 4).Value = invoiceNumber
+    wsTracker.Cells(outputRow, 5).Value = BuildLocationValue(wsSource)
+    wsTracker.Cells(outputRow, 6).Value = wsSource.Cells(FIRST_DATA_ROW, locationIdColumn).Value
+    wsTracker.Cells(outputRow, 7).Value = wsSource.Cells(FIRST_DATA_ROW, mainClientIdColumn).Value
+    wsTracker.Cells(outputRow, 8).Value = RoundTrackerValue(wsSource.Range(hoursColumnLetter & subtotalRow).Value)
+    wsTracker.Cells(outputRow, 9).Value = RoundTrackerValue(wsSource.Range(amountColumnLetter & subtotalRow).Value)
+    wsTracker.Cells(outputRow, 10).Value = RoundTrackerValue(wsSource.Range(amountColumnLetter & totalRow).Value)
+
+    outputRow = outputRow + 1
+End Sub
+
+Private Function GetPayrollPeriodFromSheet(ByVal ws As Worksheet) As String
+    GetPayrollPeriodFromSheet = StripPayrollPeriodPrefix(CStr(ws.Range(PAYROLL_PERIOD_CELL).Value))
+End Function
+
+Private Function StripPayrollPeriodPrefix(ByVal rawValue As String) As String
+    Const PREFIX As String = "For the Period:"
+
+    rawValue = Trim$(rawValue)
+
+    If Len(rawValue) = 0 Then Exit Function
+
+    If StrComp(Left$(rawValue, Len(PREFIX)), PREFIX, vbTextCompare) = 0 Then
+        StripPayrollPeriodPrefix = Trim$(Mid$(rawValue, Len(PREFIX) + 1))
+    Else
+        StripPayrollPeriodPrefix = rawValue
+    End If
+End Function
+
+Private Function BuildPayrollBoundaryDefault(ByVal payrollPeriodText As String, ByVal isStartBoundary As Boolean) As String
+    Dim periodParts() As String
+    Dim yearSuffix As String
+
+    payrollPeriodText = Trim$(payrollPeriodText)
+    If payrollPeriodText = "" Then Exit Function
+
+    periodParts = Split(payrollPeriodText, " - ")
+    If UBound(periodParts) <> 1 Then
+        BuildPayrollBoundaryDefault = payrollPeriodText
+        Exit Function
+    End If
+
+    If isStartBoundary Then
+        yearSuffix = ExtractYearSuffix(periodParts(1))
+        If yearSuffix <> "" And InStr(1, periodParts(0), ",", vbTextCompare) = 0 Then
+            BuildPayrollBoundaryDefault = Trim$(periodParts(0)) & ", " & yearSuffix
+        Else
+            BuildPayrollBoundaryDefault = Trim$(periodParts(0))
+        End If
+    Else
+        BuildPayrollBoundaryDefault = Trim$(periodParts(1))
+    End If
+End Function
+
+Private Function ExtractYearSuffix(ByVal rawValue As String) As String
+    Dim commaPosition As Long
+
+    commaPosition = InStrRev(rawValue, ",")
+    If commaPosition > 0 Then
+        ExtractYearSuffix = Trim$(Mid$(rawValue, commaPosition + 1))
+    End If
+End Function
+
+Private Function ResolveConfiguredTrackerDate(ByVal configuredValue As String, ByVal defaultValue As String, ByRef resultValue As Variant, _
+    ByVal fieldName As String) As Boolean
+    Dim parsedDate As Date
+    Dim valueToParse As String
+
+    valueToParse = Trim$(configuredValue)
+    If valueToParse = "" Then
+        valueToParse = Trim$(defaultValue)
+    End If
+
+    If Len(valueToParse) = 0 Then
+        MsgBox "Set the " & fieldName & " at the top of this module before running the tracker.", vbExclamation
+        Exit Function
+    End If
+
+    If Not TryParseTrackerDate(valueToParse, parsedDate) Then
+        MsgBox "Enter a valid " & fieldName & " at the top of this module.", vbExclamation
+        Exit Function
+    End If
+
+    resultValue = parsedDate
+    ResolveConfiguredTrackerDate = True
+End Function
+
+Private Function NormalizeTrackerValue(ByVal rawValue As Variant) As Variant
+    If IsDate(rawValue) Then
+        NormalizeTrackerValue = DateValue(CDate(rawValue))
+    Else
+        NormalizeTrackerValue = rawValue
+    End If
+End Function
+
+Private Function BuildLocationValue(ByVal ws As Worksheet) As String
+    Dim leftValue As String
+    Dim rightValue As String
+    Dim normalizedLeftValue As String
+    Dim normalizedRightValue As String
+
+    leftValue = Trim$(CStr(ws.Range(LOCATION_PREFIX_CELL).Value))
+    rightValue = Trim$(CStr(ws.Range(LOCATION_SUFFIX_CELL).Value))
+    normalizedLeftValue = UCase$(leftValue)
+    normalizedRightValue = UCase$(rightValue)
+
+    If leftValue = "" Then
+        BuildLocationValue = rightValue
+    ElseIf rightValue = "" Then
+        BuildLocationValue = leftValue
+    ElseIf normalizedLeftValue = normalizedRightValue Then
+        BuildLocationValue = leftValue
+    Else
+        BuildLocationValue = leftValue & " - " & rightValue
+    End If
+End Function
+
+Private Function FindHeaderColumn(ByVal ws As Worksheet, ByVal headerText As String, ByVal fallbackColumn As Long) As Long
+    Dim lastColumn As Long
+    Dim columnIndex As Long
+    Dim candidateHeader As String
+
+    lastColumn = ws.Cells(TABLE_HEADER_ROW, ws.Columns.Count).End(xlToLeft).Column
+
+    For columnIndex = 1 To lastColumn
+        candidateHeader = Trim$(CStr(ws.Cells(TABLE_HEADER_ROW, columnIndex).Value))
+        If StrComp(candidateHeader, headerText, vbTextCompare) = 0 Then
+            FindHeaderColumn = columnIndex
+            Exit Function
+        End If
+    Next columnIndex
+
+    FindHeaderColumn = fallbackColumn
+End Function
+
+Private Function FindLabelRow(ByVal ws As Worksheet, ByVal labelText As String) As Long
+    Dim foundCell As Range
+
+    On Error Resume Next
+    Set foundCell = ws.Columns(LABEL_COLUMN).Find(What:=labelText, LookIn:=xlValues, LookAt:=xlWhole, _
+        SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)
+    On Error GoTo 0
+
+    If Not foundCell Is Nothing Then
+        FindLabelRow = foundCell.Row
+    End If
+End Function
+
+Private Function ResolveAmountColumnLetter(ByVal ws As Worksheet, ByVal totalRow As Long) As String
+    If HasTrackerValue(ws.Range(SECONDARY_TOTAL_COLUMN & totalRow).Value) Then
+        ResolveAmountColumnLetter = SECONDARY_TOTAL_COLUMN
+    Else
+        ResolveAmountColumnLetter = PRIMARY_TOTAL_COLUMN
+    End If
+End Function
+
+Private Function ResolveHoursColumnLetter(ByVal amountColumnLetter As String) As String
+    If StrComp(amountColumnLetter, PRIMARY_TOTAL_COLUMN, vbTextCompare) = 0 Then
+        ResolveHoursColumnLetter = SECONDARY_TOTAL_COLUMN
+    Else
+        ResolveHoursColumnLetter = PRIMARY_TOTAL_COLUMN
+    End If
+End Function
+
+Private Function HasTrackerValue(ByVal rawValue As Variant) As Boolean
+    If IsError(rawValue) Or IsNull(rawValue) Or IsEmpty(rawValue) Then Exit Function
+    HasTrackerValue = (Len(Trim$(CStr(rawValue))) > 0)
+End Function
+
+Private Function TryParseTrackerDate(ByVal rawValue As String, ByRef parsedDate As Date) As Boolean
+    Dim normalizedValue As String
+    Dim dateParts() As String
+    Dim dayPart As Long
+    Dim monthPart As Long
+    Dim yearPart As Long
+
+    normalizedValue = Trim$(rawValue)
+    If normalizedValue = "" Then Exit Function
+
+    normalizedValue = Replace(normalizedValue, "-", "/")
+    normalizedValue = Replace(normalizedValue, ".", "/")
+    dateParts = Split(normalizedValue, "/")
+
+    If UBound(dateParts) = 2 Then
+        If IsNumeric(dateParts(0)) And IsNumeric(dateParts(1)) And IsNumeric(dateParts(2)) Then
+            dayPart = CLng(dateParts(0))
+            monthPart = CLng(dateParts(1))
+            yearPart = CLng(dateParts(2))
+
+            If yearPart < 100 Then yearPart = 2000 + yearPart
+
+            On Error Resume Next
+            parsedDate = DateSerial(yearPart, monthPart, dayPart)
+            TryParseTrackerDate = (Err.Number = 0)
+            On Error GoTo 0
+
+            If TryParseTrackerDate Then Exit Function
+        End If
+    End If
+
+    If IsDate(normalizedValue) Then
+        parsedDate = DateValue(normalizedValue)
+        TryParseTrackerDate = True
+    End If
+End Function
+
+Private Function RoundTrackerValue(ByVal rawValue As Variant) As Variant
+    If IsNumeric(rawValue) Then
+        RoundTrackerValue = Round(CDbl(rawValue), 2)
+    Else
+        RoundTrackerValue = rawValue
+    End If
+End Function

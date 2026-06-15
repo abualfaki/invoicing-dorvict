@@ -1,0 +1,215 @@
+Option Explicit
+
+Private Const CHECKLIST_SHEET_NAME As String = "check list"
+Private Const TABLE_HEADER_ROW As Long = 13
+Private Const FIRST_DATA_ROW As Long = 14
+Private Const LOCATION_CELL As String = "C14"
+Private Const LABEL_COLUMN As String = "F"
+Private Const RATE_COLUMN As Long = 6
+Private Const AMOUNT_COLUMN As String = "G"
+Private Const DURATION_COLUMN As String = "H"
+
+Private Const RATE_REG As Double = 26.88
+Private Const RATE_MED As Double = 27.22
+Private Const RATE_OT_STAT As Double = 40.32
+Private Const RATE_OT_STAT_MEDS As Double = 40.83
+Private Const RATE_ONS As Double = 163.1
+Private Const RATE_ONS_ALT As Double = 244.05
+
+Public Sub BuildReenaChecklistSheet()
+    Dim sourceSheetNames As Collection
+    Dim wsChecklist As Worksheet
+    Dim sheetName As Variant
+    Dim outputRow As Long
+
+    Set sourceSheetNames = GetChecklistSourceSheetNames()
+    If sourceSheetNames.Count = 0 Then
+        MsgBox "No invoice sheets were found from the second tab onward.", vbInformation
+        Exit Sub
+    End If
+
+    Set wsChecklist = GetOrCreateChecklistSheet()
+    WriteChecklistHeaders wsChecklist
+
+    outputRow = 2
+    For Each sheetName In sourceSheetNames
+        AppendChecklistRow ThisWorkbook.Worksheets(CStr(sheetName)), wsChecklist, outputRow
+    Next sheetName
+
+    wsChecklist.Columns.AutoFit
+    wsChecklist.Activate
+
+    MsgBox CStr(outputRow - 2) & " check list row(s) created.", vbInformation
+End Sub
+
+Private Function GetChecklistSourceSheetNames() As Collection
+    Dim sheetNames As New Collection
+    Dim sheetIndex As Long
+    Dim ws As Worksheet
+
+    For sheetIndex = 2 To ThisWorkbook.Worksheets.Count
+        Set ws = ThisWorkbook.Worksheets(sheetIndex)
+        If StrComp(ws.Name, CHECKLIST_SHEET_NAME, vbTextCompare) <> 0 Then
+            sheetNames.Add ws.Name
+        End If
+    Next sheetIndex
+
+    Set GetChecklistSourceSheetNames = sheetNames
+End Function
+
+Private Function GetOrCreateChecklistSheet() As Worksheet
+    Dim wsChecklist As Worksheet
+
+    On Error Resume Next
+    Set wsChecklist = ThisWorkbook.Worksheets(CHECKLIST_SHEET_NAME)
+    On Error GoTo 0
+
+    If wsChecklist Is Nothing Then
+        Set wsChecklist = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        wsChecklist.Name = CHECKLIST_SHEET_NAME
+    Else
+        wsChecklist.Cells.Clear
+        wsChecklist.Move After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count)
+    End If
+
+    Set GetOrCreateChecklistSheet = wsChecklist
+End Function
+
+Private Sub WriteChecklistHeaders(ByVal wsChecklist As Worksheet)
+    Dim headers As Variant
+    Dim colIndex As Long
+
+    headers = Array( _
+        "location", _
+        "REG (26.88)", _
+        "MED (27.22)", _
+        "OT/STAT (40.32)", _
+        "OT/STAT/meds (40.83)", _
+        "ONS (163.10)", _
+        "Amount", _
+        "Duration")
+
+    For colIndex = LBound(headers) To UBound(headers)
+        wsChecklist.Cells(1, colIndex + 1).Value = headers(colIndex)
+    Next colIndex
+
+    With wsChecklist.Rows(1)
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+    End With
+
+    wsChecklist.Columns(2).NumberFormat = "0.00"
+    wsChecklist.Columns(3).NumberFormat = "0.00"
+    wsChecklist.Columns(4).NumberFormat = "0.00"
+    wsChecklist.Columns(5).NumberFormat = "0.00"
+    wsChecklist.Columns(6).NumberFormat = "0.00"
+    wsChecklist.Columns(7).NumberFormat = "0.00"
+    wsChecklist.Columns(8).NumberFormat = "0.00"
+End Sub
+
+Private Sub AppendChecklistRow(ByVal wsSource As Worksheet, ByVal wsChecklist As Worksheet, ByRef outputRow As Long)
+    Dim subtotalRow As Long
+    Dim locationValue As String
+
+    subtotalRow = FindSummaryLabelRow(wsSource, "SUBTOTAL")
+    If subtotalRow = 0 Then Exit Sub
+    If subtotalRow <= FIRST_DATA_ROW Then Exit Sub
+
+    locationValue = Trim$(CStr(wsSource.Range(LOCATION_CELL).Value))
+    If locationValue = "" Then locationValue = wsSource.Name
+
+    wsChecklist.Cells(outputRow, 1).Value = locationValue
+    wsChecklist.Cells(outputRow, 2).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_REG)
+    wsChecklist.Cells(outputRow, 3).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_MED)
+    wsChecklist.Cells(outputRow, 4).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_OT_STAT)
+    wsChecklist.Cells(outputRow, 5).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_OT_STAT_MEDS)
+    wsChecklist.Cells(outputRow, 6).Value = SumOnsDuration(wsSource, subtotalRow - 1)
+    wsChecklist.Cells(outputRow, 7).Value = RoundNumericValue(wsSource.Range(AMOUNT_COLUMN & subtotalRow).Value)
+    wsChecklist.Cells(outputRow, 8).Value = RoundNumericValue(wsSource.Range(DURATION_COLUMN & subtotalRow).Value)
+
+    outputRow = outputRow + 1
+End Sub
+
+Private Function FindSummaryLabelRow(ByVal ws As Worksheet, ByVal labelText As String) As Long
+    Dim foundCell As Range
+
+    On Error Resume Next
+    Set foundCell = ws.Columns(LABEL_COLUMN).Find(What:=labelText, LookIn:=xlValues, LookAt:=xlWhole, _
+        SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)
+    On Error GoTo 0
+
+    If Not foundCell Is Nothing Then
+        FindSummaryLabelRow = foundCell.Row
+    End If
+End Function
+
+Private Function SumRateBucketDuration(ByVal ws As Worksheet, ByVal lastDataRow As Long, ByVal targetRate As Double) As Double
+    Dim rowNumber As Long
+    Dim currentRate As Double
+    Dim currentDuration As Double
+
+    For rowNumber = FIRST_DATA_ROW To lastDataRow
+        If TryGetNumericCellValue(ws.Cells(rowNumber, RATE_COLUMN).Value, currentRate) Then
+            If RatesMatch(currentRate, targetRate) Then
+                If TryGetNumericCellValue(ws.Range(DURATION_COLUMN & rowNumber).Value, currentDuration) Then
+                    SumRateBucketDuration = SumRateBucketDuration + currentDuration
+                End If
+            End If
+        End If
+    Next rowNumber
+
+    SumRateBucketDuration = Round(SumRateBucketDuration, 2)
+End Function
+
+Private Function SumOnsDuration(ByVal ws As Worksheet, ByVal lastDataRow As Long) As Double
+    Dim rowNumber As Long
+    Dim currentRate As Double
+    Dim currentDuration As Double
+
+    For rowNumber = FIRST_DATA_ROW To lastDataRow
+        If TryGetNumericCellValue(ws.Cells(rowNumber, RATE_COLUMN).Value, currentRate) Then
+            If RatesMatch(currentRate, RATE_ONS) Or RatesMatch(currentRate, RATE_ONS_ALT) Then
+                If TryGetNumericCellValue(ws.Range(DURATION_COLUMN & rowNumber).Value, currentDuration) Then
+                    SumOnsDuration = SumOnsDuration + currentDuration
+                End If
+            End If
+        End If
+    Next rowNumber
+
+    SumOnsDuration = Round(SumOnsDuration, 2)
+End Function
+
+Private Function TryGetNumericCellValue(ByVal rawValue As Variant, ByRef numericValue As Double) As Boolean
+    Dim cleanedValue As String
+
+    If IsError(rawValue) Or IsNull(rawValue) Or IsEmpty(rawValue) Then Exit Function
+
+    If IsNumeric(rawValue) Then
+        numericValue = CDbl(rawValue)
+        TryGetNumericCellValue = True
+        Exit Function
+    End If
+
+    cleanedValue = Trim$(CStr(rawValue))
+    cleanedValue = Replace(cleanedValue, ",", "")
+    cleanedValue = Replace(cleanedValue, "$", "")
+
+    If IsNumeric(cleanedValue) Then
+        numericValue = CDbl(cleanedValue)
+        TryGetNumericCellValue = True
+    End If
+End Function
+
+Private Function RatesMatch(ByVal leftRate As Double, ByVal rightRate As Double) As Boolean
+    RatesMatch = (Abs(leftRate - rightRate) < 0.0001)
+End Function
+
+Private Function RoundNumericValue(ByVal rawValue As Variant) As Variant
+    Dim numericValue As Double
+
+    If TryGetNumericCellValue(rawValue, numericValue) Then
+        RoundNumericValue = Round(numericValue, 2)
+    Else
+        RoundNumericValue = rawValue
+    End If
+End Function
