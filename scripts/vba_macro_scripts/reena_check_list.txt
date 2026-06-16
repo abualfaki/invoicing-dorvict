@@ -1,9 +1,16 @@
 Option Explicit
 
 Private Const CHECKLIST_SHEET_NAME As String = "check list"
+Private Const PAYROLL_PERIOD_CELL As String = "C8"
+Private Const REPORT_TITLE_ROW As Long = 1
+Private Const REPORT_PERIOD_ROW As Long = 2
+Private Const CHECKLIST_RATE_ROW As Long = 4
+Private Const CHECKLIST_HEADER_ROW As Long = 5
+Private Const CHECKLIST_FIRST_DATA_ROW As Long = 6
 Private Const TABLE_HEADER_ROW As Long = 13
 Private Const FIRST_DATA_ROW As Long = 14
 Private Const LOCATION_CELL As String = "C14"
+Private Const INVOICE_NUMBER_CELL As String = "G9"
 Private Const LABEL_COLUMN As String = "F"
 Private Const RATE_COLUMN As Long = 6
 Private Const AMOUNT_COLUMN As String = "G"
@@ -21,6 +28,10 @@ Public Sub BuildReenaChecklistSheet()
     Dim wsChecklist As Worksheet
     Dim sheetName As Variant
     Dim outputRow As Long
+    Dim lastDataRow As Long
+    Dim finalTableRow As Long
+    Dim finalPrintRow As Long
+    Dim payrollPeriodText As String
 
     Set sourceSheetNames = GetChecklistSourceSheetNames()
     If sourceSheetNames.Count = 0 Then
@@ -29,17 +40,26 @@ Public Sub BuildReenaChecklistSheet()
     End If
 
     Set wsChecklist = GetOrCreateChecklistSheet()
-    WriteChecklistHeaders wsChecklist
+    payrollPeriodText = ResolveChecklistPayrollPeriodText(ThisWorkbook.Worksheets(CStr(sourceSheetNames(1))))
+    WriteChecklistHeaders wsChecklist, payrollPeriodText
 
-    outputRow = 2
+    outputRow = CHECKLIST_FIRST_DATA_ROW
     For Each sheetName In sourceSheetNames
         AppendChecklistRow ThisWorkbook.Worksheets(CStr(sheetName)), wsChecklist, outputRow
     Next sheetName
 
+    lastDataRow = outputRow - 1
+    finalTableRow = AddChecklistTotalsRow(wsChecklist, lastDataRow)
+    finalPrintRow = AddChecklistGlossary(wsChecklist, finalTableRow)
+
+    ApplyChecklistTableFormatting wsChecklist, finalTableRow
     wsChecklist.Columns.AutoFit
+    ApplyChecklistColumnWidths wsChecklist
+    ApplyChecklistPrintSetup wsChecklist, finalPrintRow
+    AddInvoiceExportButtonsForSheet wsChecklist
     wsChecklist.Activate
 
-    MsgBox CStr(outputRow - 2) & " check list row(s) created.", vbInformation
+    MsgBox CStr(outputRow - CHECKLIST_FIRST_DATA_ROW) & " check list row(s) created.", vbInformation
 End Sub
 
 Private Function GetChecklistSourceSheetNames() As Collection
@@ -75,41 +95,170 @@ Private Function GetOrCreateChecklistSheet() As Worksheet
     Set GetOrCreateChecklistSheet = wsChecklist
 End Function
 
-Private Sub WriteChecklistHeaders(ByVal wsChecklist As Worksheet)
+Private Sub WriteChecklistHeaders(ByVal wsChecklist As Worksheet, ByVal payrollPeriodText As String)
     Dim headers As Variant
+    Dim rateHeaders As Variant
     Dim colIndex As Long
 
+    With wsChecklist.Range(wsChecklist.Cells(REPORT_TITLE_ROW, 1), wsChecklist.Cells(REPORT_TITLE_ROW, 9))
+        .Merge
+        .Value = "DORVICT RESOURCE AND CONSULTING CENTRE INC."
+        .Font.Name = "Arial"
+        .Font.Size = 10
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+    End With
+
+    With wsChecklist.Range(wsChecklist.Cells(REPORT_PERIOD_ROW, 1), wsChecklist.Cells(REPORT_PERIOD_ROW, 9))
+        .Merge
+        .Value = "REENA BI-WEEKLY REPORT " & payrollPeriodText
+        .Font.Name = "Arial"
+        .Font.Size = 10
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+    End With
+
     headers = Array( _
-        "location", _
-        "REG (26.88)", _
-        "MED (27.22)", _
-        "OT/STAT (40.32)", _
-        "OT/STAT/meds (40.83)", _
-        "ONS (163.10)", _
+        "Location", _
+        "Invoice #", _
+        "REG", _
+        "MED", _
+        "ONS", _
+        "OT/STAT", _
+        "MEDS - OT/STAT", _
         "Amount", _
         "Duration")
 
+    rateHeaders = Array( _
+        "", _
+        "Rates", _
+        RATE_REG, _
+        RATE_MED, _
+        RATE_ONS, _
+        RATE_OT_STAT, _
+        RATE_OT_STAT_MEDS, _
+        "", _
+        "")
+
     For colIndex = LBound(headers) To UBound(headers)
-        wsChecklist.Cells(1, colIndex + 1).Value = headers(colIndex)
+        wsChecklist.Cells(CHECKLIST_HEADER_ROW, colIndex + 1).Value = headers(colIndex)
+        wsChecklist.Cells(CHECKLIST_RATE_ROW, colIndex + 1).Value = rateHeaders(colIndex)
     Next colIndex
 
-    With wsChecklist.Rows(1)
+    wsChecklist.Cells(CHECKLIST_RATE_ROW, 2).NumberFormat = "@"
+
+    With wsChecklist.Rows(CHECKLIST_HEADER_ROW)
         .Font.Bold = True
+        .Font.Name = "Arial"
+        .Font.Size = 10
         .HorizontalAlignment = xlCenter
     End With
 
-    wsChecklist.Columns(2).NumberFormat = "0.00"
+    With wsChecklist.Rows(CHECKLIST_RATE_ROW)
+        .Font.Bold = True
+        .Font.Name = "Arial"
+        .Font.Size = 10
+        .HorizontalAlignment = xlCenter
+    End With
+
     wsChecklist.Columns(3).NumberFormat = "0.00"
     wsChecklist.Columns(4).NumberFormat = "0.00"
     wsChecklist.Columns(5).NumberFormat = "0.00"
     wsChecklist.Columns(6).NumberFormat = "0.00"
     wsChecklist.Columns(7).NumberFormat = "0.00"
-    wsChecklist.Columns(8).NumberFormat = "0.00"
+    wsChecklist.Columns(8).Style = "Currency"
+    wsChecklist.Columns(9).NumberFormat = "0.00"
+    wsChecklist.Range(wsChecklist.Cells(CHECKLIST_RATE_ROW, 3), wsChecklist.Cells(CHECKLIST_RATE_ROW, 7)).Style = "Currency"
 End Sub
+
+Private Function AddChecklistTotalsRow(ByVal wsChecklist As Worksheet, ByVal lastDataRow As Long) As Long
+    Dim totalsRow As Long
+
+    If lastDataRow < CHECKLIST_FIRST_DATA_ROW Then
+        AddChecklistTotalsRow = CHECKLIST_RATE_ROW
+        Exit Function
+    End If
+
+    totalsRow = lastDataRow + 1
+
+    wsChecklist.Cells(totalsRow, 1).Value = "Totals"
+    wsChecklist.Cells(totalsRow, 2).Value = CountDistinctChecklistInvoiceNumbers(wsChecklist, lastDataRow)
+    wsChecklist.Cells(totalsRow, 3).Formula = "=SUM(C" & CHECKLIST_FIRST_DATA_ROW & ":C" & lastDataRow & ")"
+    wsChecklist.Cells(totalsRow, 4).Formula = "=SUM(D" & CHECKLIST_FIRST_DATA_ROW & ":D" & lastDataRow & ")"
+    wsChecklist.Cells(totalsRow, 5).Formula = "=SUM(E" & CHECKLIST_FIRST_DATA_ROW & ":E" & lastDataRow & ")"
+    wsChecklist.Cells(totalsRow, 6).Formula = "=SUM(F" & CHECKLIST_FIRST_DATA_ROW & ":F" & lastDataRow & ")"
+    wsChecklist.Cells(totalsRow, 7).Formula = "=SUM(G" & CHECKLIST_FIRST_DATA_ROW & ":G" & lastDataRow & ")"
+    wsChecklist.Cells(totalsRow, 8).Formula = "=SUM(H" & CHECKLIST_FIRST_DATA_ROW & ":H" & lastDataRow & ")"
+    wsChecklist.Cells(totalsRow, 9).Formula = "=SUM(I" & CHECKLIST_FIRST_DATA_ROW & ":I" & lastDataRow & ")"
+
+    wsChecklist.Range(wsChecklist.Cells(totalsRow, 3), wsChecklist.Cells(totalsRow, 7)).NumberFormat = "#,##0.00"
+    wsChecklist.Cells(totalsRow, 9).NumberFormat = "#,##0.00"
+
+    AddChecklistTotalsRow = totalsRow
+End Function
+
+Private Function AddChecklistGlossary(ByVal wsChecklist As Worksheet, ByVal finalTableRow As Long) As Long
+    Dim codesRow As Long
+    Dim disclaimerRow As Long
+
+    codesRow = finalTableRow + 3
+
+    With wsChecklist.Cells(codesRow, 1)
+        .Value = "CODES:"
+        .Font.Name = "Arial"
+        .Font.Size = 12
+        .Font.Bold = True
+    End With
+
+    With wsChecklist.Cells(codesRow + 1, 1)
+        .Value = "ONS=OVERNIGHT SLEEP"
+        .Font.Name = "Arial"
+        .Font.Size = 8
+    End With
+
+    With wsChecklist.Cells(codesRow + 1, 2)
+        .Value = "STAT=STATUTORY HOLIDAY"
+        .Font.Name = "Arial"
+        .Font.Size = 8
+    End With
+
+    With wsChecklist.Cells(codesRow + 2, 1)
+        .Value = "REG = REGULAR STAFF"
+        .Font.Name = "Arial"
+        .Font.Size = 8
+    End With
+
+    With wsChecklist.Cells(codesRow + 2, 2)
+        .Value = "OT=OVERTIME"
+        .Font.Name = "Arial"
+        .Font.Size = 8
+    End With
+
+    With wsChecklist.Cells(codesRow + 3, 1)
+        .Value = "MEDS = MEDS TRAINED STAFF"
+        .Font.Name = "Arial"
+        .Font.Size = 8
+    End With
+
+    disclaimerRow = codesRow + 5
+    With wsChecklist.Range(wsChecklist.Cells(disclaimerRow, 1), wsChecklist.Cells(disclaimerRow, 9))
+        .Merge
+        .Value = "** All amounts do not include GST/HST **"
+        .Font.Name = "Arial"
+        .Font.Size = 10
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+    End With
+
+    AddChecklistGlossary = disclaimerRow
+End Function
 
 Private Sub AppendChecklistRow(ByVal wsSource As Worksheet, ByVal wsChecklist As Worksheet, ByRef outputRow As Long)
     Dim subtotalRow As Long
     Dim locationValue As String
+    Dim invoiceNumber As String
 
     subtotalRow = FindSummaryLabelRow(wsSource, "SUBTOTAL")
     If subtotalRow = 0 Then Exit Sub
@@ -117,18 +266,121 @@ Private Sub AppendChecklistRow(ByVal wsSource As Worksheet, ByVal wsChecklist As
 
     locationValue = Trim$(CStr(wsSource.Range(LOCATION_CELL).Value))
     If locationValue = "" Then locationValue = wsSource.Name
+    invoiceNumber = Trim$(CStr(wsSource.Range(INVOICE_NUMBER_CELL).Text))
 
     wsChecklist.Cells(outputRow, 1).Value = locationValue
-    wsChecklist.Cells(outputRow, 2).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_REG)
-    wsChecklist.Cells(outputRow, 3).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_MED)
-    wsChecklist.Cells(outputRow, 4).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_OT_STAT)
-    wsChecklist.Cells(outputRow, 5).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_OT_STAT_MEDS)
-    wsChecklist.Cells(outputRow, 6).Value = SumOnsDuration(wsSource, subtotalRow - 1)
-    wsChecklist.Cells(outputRow, 7).Value = RoundNumericValue(wsSource.Range(AMOUNT_COLUMN & subtotalRow).Value)
-    wsChecklist.Cells(outputRow, 8).Value = RoundNumericValue(wsSource.Range(DURATION_COLUMN & subtotalRow).Value)
+    wsChecklist.Cells(outputRow, 2).Value = invoiceNumber
+    wsChecklist.Cells(outputRow, 3).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_REG)
+    wsChecklist.Cells(outputRow, 4).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_MED)
+    wsChecklist.Cells(outputRow, 5).Value = SumOnsDuration(wsSource, subtotalRow - 1)
+    wsChecklist.Cells(outputRow, 6).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_OT_STAT)
+    wsChecklist.Cells(outputRow, 7).Value = SumRateBucketDuration(wsSource, subtotalRow - 1, RATE_OT_STAT_MEDS)
+    wsChecklist.Cells(outputRow, 8).Value = RoundNumericValue(wsSource.Range(AMOUNT_COLUMN & subtotalRow).Value)
+    wsChecklist.Cells(outputRow, 9).Value = RoundNumericValue(wsSource.Range(DURATION_COLUMN & subtotalRow).Value)
 
     outputRow = outputRow + 1
 End Sub
+
+Private Sub ApplyChecklistTableFormatting(ByVal wsChecklist As Worksheet, ByVal lastDataRow As Long)
+    Dim tableRange As Range
+    Dim headerRange As Range
+    Dim amountRange As Range
+    Dim totalsRange As Range
+    Dim ratesHeaderRange As Range
+
+    If lastDataRow < 1 Then Exit Sub
+
+    Set tableRange = wsChecklist.Range(wsChecklist.Cells(CHECKLIST_HEADER_ROW, 1), wsChecklist.Cells(lastDataRow, 9))
+    Set headerRange = wsChecklist.Range(wsChecklist.Cells(CHECKLIST_HEADER_ROW, 1), wsChecklist.Cells(CHECKLIST_RATE_ROW, 9))
+    Set ratesHeaderRange = wsChecklist.Range("B4:G8")
+    If lastDataRow >= CHECKLIST_FIRST_DATA_ROW Then
+        Set amountRange = wsChecklist.Range(wsChecklist.Cells(CHECKLIST_FIRST_DATA_ROW, 8), wsChecklist.Cells(lastDataRow, 8))
+        Set totalsRange = wsChecklist.Range(wsChecklist.Cells(lastDataRow, 1), wsChecklist.Cells(lastDataRow, 9))
+    End If
+
+    With tableRange
+        .Font.Name = "Arial"
+        .Font.Size = 10
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        .Borders.LineStyle = xlContinuous
+        .Borders.Weight = xlThin
+    End With
+
+    If Not amountRange Is Nothing Then
+        amountRange.HorizontalAlignment = xlGeneral
+    End If
+
+    If Not totalsRange Is Nothing Then
+        totalsRange.Font.Bold = True
+    End If
+
+    With ratesHeaderRange.Borders
+        .LineStyle = xlContinuous
+        .Weight = xlThin
+    End With
+
+    wsChecklist.Rows(REPORT_TITLE_ROW).RowHeight = 18
+    wsChecklist.Rows(REPORT_PERIOD_ROW).RowHeight = 18
+    tableRange.Rows.RowHeight = 20
+    headerRange.RowHeight = 24
+End Sub
+
+Private Sub ApplyChecklistColumnWidths(ByVal wsChecklist As Worksheet)
+    wsChecklist.Columns(3).ColumnWidth = 9
+    wsChecklist.Columns(4).ColumnWidth = 9
+    wsChecklist.Columns(5).ColumnWidth = 9
+    wsChecklist.Columns(2).ColumnWidth = 10
+    wsChecklist.Columns(8).ColumnWidth = 17
+    wsChecklist.Columns(9).ColumnWidth = 17
+End Sub
+
+Private Sub ApplyChecklistPrintSetup(ByVal wsChecklist As Worksheet, ByVal lastDataRow As Long)
+    Dim printRange As Range
+
+    If lastDataRow < 1 Then Exit Sub
+
+    Set printRange = wsChecklist.Range(wsChecklist.Cells(1, 1), wsChecklist.Cells(lastDataRow, 9))
+
+    With wsChecklist.PageSetup
+        .PrintArea = printRange.Address
+        .Orientation = xlLandscape
+        .Zoom = False
+        .FitToPagesWide = 1
+        .FitToPagesTall = False
+        .CenterHorizontally = True
+        .LeftMargin = Application.InchesToPoints(0.25)
+        .RightMargin = Application.InchesToPoints(0.25)
+        .TopMargin = Application.InchesToPoints(0.5)
+        .BottomMargin = Application.InchesToPoints(0.5)
+        .HeaderMargin = Application.InchesToPoints(0.25)
+        .FooterMargin = Application.InchesToPoints(0.25)
+    End With
+End Sub
+
+Private Function CountDistinctChecklistInvoiceNumbers(ByVal wsChecklist As Worksheet, ByVal lastDataRow As Long) As Long
+    Dim seenInvoices As New Collection
+    Dim rowNumber As Long
+    Dim invoiceNumber As String
+
+    For rowNumber = CHECKLIST_FIRST_DATA_ROW To lastDataRow
+        invoiceNumber = Trim$(CStr(wsChecklist.Cells(rowNumber, 2).Value))
+        If Len(invoiceNumber) > 0 Then
+            On Error Resume Next
+            seenInvoices.Add invoiceNumber, invoiceNumber
+            On Error GoTo 0
+        End If
+    Next rowNumber
+
+    CountDistinctChecklistInvoiceNumbers = seenInvoices.Count
+End Function
+
+Private Function ResolveChecklistPayrollPeriodText(ByVal wsSource As Worksheet) As String
+    Dim rawPeriodText As String
+
+    rawPeriodText = Trim$(CStr(wsSource.Range(PAYROLL_PERIOD_CELL).Value))
+    ResolveChecklistPayrollPeriodText = Replace(rawPeriodText, "For the Period: ", "", 1, 1, vbTextCompare)
+End Function
 
 Private Function FindSummaryLabelRow(ByVal ws As Worksheet, ByVal labelText As String) As Long
     Dim foundCell As Range

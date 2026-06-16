@@ -1,0 +1,255 @@
+Option Explicit
+
+Public Sub RunReenaInvoiceSheetEdgeCaseChecks()
+    Const HEADER_ROW As Long = 13
+    Const FIRST_DATA_ROW As Long = 14
+    Const AMOUNT_THRESHOLD As Double = 300
+    Const DURATION_TOLERANCE As Double = 0.01
+
+    Dim sheetIndex As Long
+    Dim processedSheets As Long
+    Dim flaggedDurationCells As Long
+    Dim flaggedAmountCells As Long
+    Dim flaggedCodeCells As Long
+
+    If ThisWorkbook.Worksheets.Count < 2 Then
+        MsgBox "This workbook does not have any invoice sheets after the first sheet.", vbInformation
+        Exit Sub
+    End If
+
+    For sheetIndex = 2 To ThisWorkbook.Worksheets.Count
+        If SheetLooksLikeInvoice(ThisWorkbook.Worksheets(sheetIndex), HEADER_ROW) Then
+            ApplyEdgeCaseChecksToSheet ThisWorkbook.Worksheets(sheetIndex), HEADER_ROW, FIRST_DATA_ROW, _
+                                       AMOUNT_THRESHOLD, DURATION_TOLERANCE, _
+                                       flaggedDurationCells, flaggedAmountCells, flaggedCodeCells
+            processedSheets = processedSheets + 1
+        End If
+    Next sheetIndex
+
+    MsgBox processedSheets & " sheet(s) checked." & vbCrLf & _
+           flaggedDurationCells & " duration cell(s) highlighted yellow." & vbCrLf & _
+           flaggedAmountCells & " amount cell(s) highlighted orange." & vbCrLf & _
+           flaggedCodeCells & " code cell(s) marked ONS in red.", vbInformation
+End Sub
+
+Private Sub ApplyEdgeCaseChecksToSheet(ByVal ws As Worksheet, ByVal headerRow As Long, ByVal firstDataRow As Long, _
+    ByVal amountThreshold As Double, ByVal durationTolerance As Double, _
+    ByRef flaggedDurationCells As Long, ByRef flaggedAmountCells As Long, ByRef flaggedCodeCells As Long)
+
+    Dim colName As Long
+    Dim colAmount As Long
+    Dim colDuration As Long
+    Dim colCode As Long
+    Dim colONSFlag As Long
+    Dim hourlyUnitCol As Long
+    Dim hourlyMedsUnitCol As Long
+    Dim onsUnitCol As Long
+    Dim overtimeHourlyUnitCol As Long
+    Dim overtimeMedsUnitCol As Long
+    Dim statHourlyUnitCol As Long
+    Dim statHourlyMedsUnitCol As Long
+    Dim statOnsUnitCol As Long
+    Dim lastRow As Long
+    Dim rowNumber As Long
+
+    colName = FindHeaderColumn(ws, headerRow, "Recorded by Name")
+    If colName = 0 Then colName = 2
+
+    colAmount = FindHeaderColumn(ws, headerRow, "Amount")
+    If colAmount = 0 Then colAmount = 7
+
+    colDuration = FindHeaderColumn(ws, headerRow, "Duration")
+    If colDuration = 0 Then colDuration = 8
+
+    colCode = FindHeaderColumn(ws, headerRow, "Code")
+    If colCode = 0 Then colCode = 9
+
+    colONSFlag = FindHeaderColumn(ws, headerRow, "ONS")
+    If colONSFlag = 0 Then colONSFlag = 10
+
+    hourlyUnitCol = FindHeaderColumn(ws, headerRow, "HOURLY(unit)")
+    hourlyMedsUnitCol = FindHeaderColumn(ws, headerRow, "HOURLY-MEDS(unit)")
+    onsUnitCol = FindHeaderColumn(ws, headerRow, "ONS(unit)")
+    overtimeHourlyUnitCol = FindHeaderColumn(ws, headerRow, "OVERTIME-HOURLY(unit)")
+    overtimeMedsUnitCol = FindHeaderColumn(ws, headerRow, "OVERTIME-MEDS(unit)")
+    statHourlyUnitCol = FindHeaderColumn(ws, headerRow, "STAT Hourly(unit)")
+    statHourlyMedsUnitCol = FindHeaderColumn(ws, headerRow, "STAT HOURLY-MEDS(unit)")
+    statOnsUnitCol = FindHeaderColumn(ws, headerRow, "STAT ONS(unit)")
+
+    lastRow = GetLastInvoiceCheckRow(ws, firstDataRow)
+    If lastRow < firstDataRow Then Exit Sub
+
+    For rowNumber = firstDataRow To lastRow
+        Dim isONSFollowUpRow As Boolean
+        Dim isONSPairedRow As Boolean
+        Dim highlightEndRow As Long
+        Dim expectedDuration As Double
+        Dim summedUnits As Double
+        Dim numericValue As Double
+        Dim isONSShift As Boolean
+
+        If Not IsInvoiceDataRow(ws, rowNumber, colName) Then
+            GoTo NextRow
+        End If
+
+        isONSFollowUpRow = IsONSFollowUpInvoiceRow(ws, rowNumber, firstDataRow, colCode, colName)
+        isONSPairedRow = IsONSLeadInvoiceRow(ws, rowNumber, lastRow, colCode, colName)
+        highlightEndRow = rowNumber
+
+        If Not isONSFollowUpRow Then
+            expectedDuration = 0
+            If TryParseDecimalValue(ws.Cells(rowNumber, colDuration).Value, numericValue) Then
+                expectedDuration = numericValue
+            End If
+
+            If isONSPairedRow Then
+                If TryParseDecimalValue(ws.Cells(rowNumber + 1, colDuration).Value, numericValue) Then
+                    expectedDuration = expectedDuration + numericValue
+                    highlightEndRow = rowNumber + 1
+                End If
+            End If
+
+            summedUnits = GetCellNumericValue(ws, rowNumber, hourlyUnitCol) + _
+                          GetCellNumericValue(ws, rowNumber, hourlyMedsUnitCol) + _
+                          GetCellNumericValue(ws, rowNumber, onsUnitCol) + _
+                          GetCellNumericValue(ws, rowNumber, overtimeHourlyUnitCol) + _
+                          GetCellNumericValue(ws, rowNumber, overtimeMedsUnitCol) + _
+                          GetCellNumericValue(ws, rowNumber, statHourlyUnitCol) + _
+                          GetCellNumericValue(ws, rowNumber, statHourlyMedsUnitCol) + _
+                          GetCellNumericValue(ws, rowNumber, statOnsUnitCol)
+
+            If Abs(summedUnits - expectedDuration) > durationTolerance Then
+                ws.Range(ws.Cells(rowNumber, colDuration), ws.Cells(highlightEndRow, colDuration)).Interior.Color = RGB(255, 255, 0)
+                flaggedDurationCells = flaggedDurationCells + (highlightEndRow - rowNumber + 1)
+            End If
+        End If
+
+        If TryParseDecimalValue(ws.Cells(rowNumber, colAmount).Value, numericValue) Then
+            If numericValue > amountThreshold Then
+                ws.Cells(rowNumber, colAmount).Interior.Color = RGB(255, 192, 0)
+                flaggedAmountCells = flaggedAmountCells + 1
+            End If
+        End If
+
+        isONSShift = (UCase$(Trim$(CStr(ws.Cells(rowNumber, colONSFlag).Value))) = "YES")
+        If isONSShift Then
+            If HasCellValue(ws, rowNumber, onsUnitCol) Or HasCellValue(ws, rowNumber, statOnsUnitCol) Then
+                ws.Cells(rowNumber, colCode).Value = "ONS"
+                ws.Cells(rowNumber, colCode).Interior.Color = RGB(255, 0, 0)
+                ws.Cells(rowNumber, colCode).Font.Color = RGB(255, 255, 255)
+                flaggedCodeCells = flaggedCodeCells + 1
+            End If
+        End If
+
+NextRow:
+    Next rowNumber
+End Sub
+
+Private Function SheetLooksLikeInvoice(ByVal ws As Worksheet, ByVal headerRow As Long) As Boolean
+    SheetLooksLikeInvoice = (FindHeaderColumn(ws, headerRow, "Amount") > 0 And _
+                             FindHeaderColumn(ws, headerRow, "Code") > 0)
+End Function
+
+Private Function GetLastInvoiceCheckRow(ByVal ws As Worksheet, ByVal firstDataRow As Long) As Long
+    Dim totalsCell As Range
+    Dim enquiriesCell As Range
+
+    On Error Resume Next
+    Set totalsCell = ws.Columns("F").Find(What:="SUBTOTAL", LookIn:=xlValues, LookAt:=xlWhole, _
+                                          SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)
+    Set enquiriesCell = ws.Columns("A").Find(What:="ENQUIRIES:", LookIn:=xlValues, LookAt:=xlWhole, _
+                                             SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)
+    On Error GoTo 0
+
+    If Not totalsCell Is Nothing Then
+        GetLastInvoiceCheckRow = totalsCell.Row - 1
+    ElseIf Not enquiriesCell Is Nothing Then
+        GetLastInvoiceCheckRow = enquiriesCell.Row - 1
+    Else
+        GetLastInvoiceCheckRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+    End If
+
+    If GetLastInvoiceCheckRow < firstDataRow Then
+        GetLastInvoiceCheckRow = firstDataRow - 1
+    End If
+End Function
+
+Private Function IsInvoiceDataRow(ByVal ws As Worksheet, ByVal rowNumber As Long, ByVal colName As Long) As Boolean
+    Dim rowLabel As String
+
+    rowLabel = Trim$(CStr(ws.Cells(rowNumber, colName).Value))
+
+    If rowLabel = "" Then Exit Function
+    If Left$(UCase$(rowLabel), Len("SUBTOTAL FOR UNIT")) = "SUBTOTAL FOR UNIT" Then Exit Function
+
+    IsInvoiceDataRow = True
+End Function
+
+Private Function IsONSLeadInvoiceRow(ByVal ws As Worksheet, ByVal rowNumber As Long, ByVal lastRow As Long, _
+    ByVal colCode As Long, ByVal colName As Long) As Boolean
+
+    If rowNumber >= lastRow Then Exit Function
+    If InStr(1, CStr(ws.Cells(rowNumber, colCode).Value), "ONS", vbTextCompare) = 0 Then Exit Function
+    If Not IsInvoiceDataRow(ws, rowNumber + 1, colName) Then Exit Function
+    If Trim$(CStr(ws.Cells(rowNumber + 1, colCode).Value)) <> "" Then Exit Function
+
+    IsONSLeadInvoiceRow = True
+End Function
+
+Private Function IsONSFollowUpInvoiceRow(ByVal ws As Worksheet, ByVal rowNumber As Long, ByVal firstDataRow As Long, _
+    ByVal colCode As Long, ByVal colName As Long) As Boolean
+
+    If rowNumber <= firstDataRow Then Exit Function
+    If Trim$(CStr(ws.Cells(rowNumber, colCode).Value)) <> "" Then Exit Function
+    If Not IsInvoiceDataRow(ws, rowNumber - 1, colName) Then Exit Function
+    If InStr(1, CStr(ws.Cells(rowNumber - 1, colCode).Value), "ONS", vbTextCompare) = 0 Then Exit Function
+
+    IsONSFollowUpInvoiceRow = True
+End Function
+
+Private Function FindHeaderColumn(ByVal ws As Worksheet, ByVal headerRow As Long, ByVal headerText As String) As Long
+    Dim headerCell As Range
+
+    On Error Resume Next
+    Set headerCell = ws.Rows(headerRow).Find(What:=headerText, LookIn:=xlValues, LookAt:=xlWhole, _
+                                             SearchOrder:=xlByColumns, SearchDirection:=xlNext, MatchCase:=False)
+    On Error GoTo 0
+
+    If Not headerCell Is Nothing Then
+        FindHeaderColumn = headerCell.Column
+    End If
+End Function
+
+Private Function GetCellNumericValue(ByVal ws As Worksheet, ByVal rowNumber As Long, ByVal colNumber As Long) As Double
+    Dim numericValue As Double
+
+    If colNumber <= 0 Then Exit Function
+
+    If TryParseDecimalValue(ws.Cells(rowNumber, colNumber).Value, numericValue) Then
+        GetCellNumericValue = numericValue
+    End If
+End Function
+
+Private Function HasCellValue(ByVal ws As Worksheet, ByVal rowNumber As Long, ByVal colNumber As Long) As Boolean
+    If colNumber <= 0 Then Exit Function
+    HasCellValue = (Trim$(CStr(ws.Cells(rowNumber, colNumber).Value)) <> "")
+End Function
+
+Private Function TryParseDecimalValue(ByVal cellValue As Variant, ByRef parsedNumber As Double) As Boolean
+    Dim cleanedValue As String
+
+    If IsNumeric(cellValue) Then
+        parsedNumber = CDbl(cellValue)
+        TryParseDecimalValue = True
+        Exit Function
+    End If
+
+    cleanedValue = Trim$(CStr(cellValue))
+    cleanedValue = Replace(cleanedValue, ",", "")
+    cleanedValue = Replace(cleanedValue, "$", "")
+
+    If IsNumeric(cleanedValue) Then
+        parsedNumber = CDbl(cleanedValue)
+        TryParseDecimalValue = True
+    End If
+End Function

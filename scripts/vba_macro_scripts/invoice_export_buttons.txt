@@ -15,9 +15,13 @@ Public Sub AddInvoiceExportButtons()
 End Sub
 
 Public Sub AddInvoiceExportButtonsForSheet(ByVal ws As Worksheet)
+    Dim anchorCell As Range
+
     RemoveInvoiceExportButtons ws
-    CreateInvoiceExportButton ws, EXCEL_BUTTON_NAME, "Save as Excel", "SaveActiveInvoiceSheetAsExcel", ws.Range("K2").Left, ws.Range("K2").Top
-    CreateInvoiceExportButton ws, PDF_BUTTON_NAME, "Save as PDF", "SaveActiveInvoiceSheetAsPdf", ws.Range("K4").Left, ws.Range("K4").Top
+    Set anchorCell = ResolveButtonAnchorCell(ws)
+
+    CreateInvoiceExportButton ws, EXCEL_BUTTON_NAME, "Save as Excel", "SaveActiveInvoiceSheetAsExcel", anchorCell.Left, anchorCell.Top
+    CreateInvoiceExportButton ws, PDF_BUTTON_NAME, "Save as PDF", "SaveActiveInvoiceSheetAsPdf", anchorCell.Left, anchorCell.Top + 32
 End Sub
 
 Public Sub RemoveInvoiceExportButtonsFromActiveSheet()
@@ -83,7 +87,7 @@ Private Sub ExportInvoiceSheetAsPdf(ByVal ws As Worksheet)
     Dim tempWorkbook As Workbook
     Dim tempWorksheet As Worksheet
 
-    fileBaseName = BuildInvoiceExportFileName(ws)
+    fileBaseName = BuildInvoicePdfExportFileName(ws)
     If Len(fileBaseName) = 0 Then Exit Sub
 
     exportPath = NormalizeFolderPath(EXPORT_PDF_PATH)
@@ -124,6 +128,18 @@ CleanFail:
     Application.ScreenUpdating = True
     MsgBox "PDF export failed: " & Err.Description, vbExclamation
 End Sub
+
+Private Function BuildInvoicePdfExportFileName(ByVal ws As Worksheet) As String
+    Dim checklistReportTitle As String
+
+    checklistReportTitle = ResolveChecklistReportTitle(ws)
+    If Len(checklistReportTitle) > 0 Then
+        BuildInvoicePdfExportFileName = SanitizeFileName(checklistReportTitle)
+        Exit Function
+    End If
+
+    BuildInvoicePdfExportFileName = BuildInvoiceExportFileName(ws)
+End Function
 
 '========================
 ' Helpers
@@ -176,6 +192,43 @@ Private Sub PrepareWorksheetForPdfExport(ByVal sourceWorksheet As Worksheet, ByV
     exportWorksheet.Calculate
 End Sub
 
+Private Function ResolveButtonAnchorCell(ByVal ws As Worksheet) As Range
+    Dim placementRange As Range
+    Dim anchorRow As Long
+    Dim anchorColumn As Long
+
+    Set placementRange = ResolveButtonPlacementRange(ws)
+    If placementRange Is Nothing Then
+        Set ResolveButtonAnchorCell = ws.Range("K2")
+        Exit Function
+    End If
+
+    anchorRow = placementRange.Row
+    If anchorRow < 2 Then anchorRow = 2
+
+    anchorColumn = placementRange.Column + placementRange.Columns.Count + 1
+    If anchorColumn > ws.Columns.Count Then
+        anchorColumn = ws.Columns.Count
+    End If
+
+    Set ResolveButtonAnchorCell = ws.Cells(anchorRow, anchorColumn)
+End Function
+
+Private Function ResolveButtonPlacementRange(ByVal ws As Worksheet) As Range
+    Dim printAreaAddress As String
+
+    On Error Resume Next
+    printAreaAddress = Trim$(ws.PageSetup.PrintArea)
+    If Len(printAreaAddress) > 0 Then
+        Set ResolveButtonPlacementRange = ws.Range(printAreaAddress)
+    End If
+    On Error GoTo 0
+
+    If ResolveButtonPlacementRange Is Nothing Then
+        Set ResolveButtonPlacementRange = GetUsedContentRange(ws)
+    End If
+End Function
+
 Private Function BuildInvoiceExportFileName(ByVal ws As Worksheet) As String
     Dim invoiceNumber As String
     Dim locationName As String
@@ -194,6 +247,15 @@ Private Function BuildInvoiceExportFileName(ByVal ws As Worksheet) As String
     End If
 
     BuildInvoiceExportFileName = SanitizeFileName(invoiceNumber & " - " & locationName)
+End Function
+
+Private Function ResolveChecklistReportTitle(ByVal ws As Worksheet) As String
+    Dim reportTitle As String
+
+    reportTitle = Trim$(CStr(ws.Range("A2").Text))
+    If InStr(1, reportTitle, "REENA BI-WEEKLY REPORT", vbTextCompare) = 1 Then
+        ResolveChecklistReportTitle = reportTitle
+    End If
 End Function
 
 Private Function ResolveInvoiceLocationName(ByVal ws As Worksheet) As String
