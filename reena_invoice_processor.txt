@@ -123,10 +123,54 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
             isONS = (UCase$(Trim$(CStr(wsSource.Cells(i, colONS).value))) = "YES")
 
             If isONS Then
+                Dim originalStart As Variant
                 Dim originalEnd As Variant
                 Dim originalShiftDate As Variant
+                Dim originalRate As Double
+                Dim preONSStart As Double
+                Dim preONSEnd As Double
+                Dim postONSStart As Double
+                Dim postONSEnd As Double
+                Dim hasPreONSSegment As Boolean
+                Dim hasPostONSSegment As Boolean
+
+                originalStart = NormalizeTimeValue(wsSource.Cells(i, colStart).value)
                 originalEnd = NormalizeTimeValue(wsSource.Cells(i, colEnd).value)
                 originalShiftDate = NormalizeDate(wsSource.Cells(i, colDate).value)
+
+                If InStr(1, UCase$(CStr(wsSource.Cells(i, colName).value)), "MEDS", vbTextCompare) > 0 Then
+                    originalRate = 27.22
+                Else
+                    originalRate = 26.22
+                End If
+
+                hasPreONSSegment = False
+                hasPostONSSegment = False
+
+                If IsNumeric(originalStart) Then
+                    preONSStart = CDbl(originalStart)
+                    preONSEnd = CDbl(TimeValue("11:00:00 PM"))
+                    hasPreONSSegment = (preONSStart < preONSEnd)
+                End If
+
+                If IsNumeric(originalEnd) Then
+                    postONSStart = CDbl(TimeValue("6:00:00 AM"))
+                    postONSEnd = CDbl(originalEnd)
+                    hasPostONSSegment = (postONSEnd > postONSStart)
+                End If
+
+                If hasPreONSSegment Then
+                    wsDest.Rows(destRow).value = wsSource.Rows(i).value
+                    wsDest.Cells(destRow, colDate).value = originalShiftDate
+                    wsDest.Cells(destRow, colStart).value = preONSStart
+                    wsDest.Cells(destRow, colEnd).value = preONSEnd
+                    wsDest.Cells(destRow, colDuration).value = Round((preONSEnd - preONSStart) * 24, 2)
+                    wsDest.Cells(destRow, colClient).value = itemDescriptionOverride
+                    wsDest.Cells(destRow, colUnit).value = ""
+                    wsDest.Cells(destRow, colRate).value = originalRate
+                    wsDest.Cells(destRow, colTotal).Formula = "=ROUND(" & wsDest.Cells(destRow, colDuration).Address(False, False) & "*" & wsDest.Cells(destRow, colRate).Address(False, False) & ",2)"
+                    destRow = destRow + 1
+                End If
 
                 wsDest.Rows(destRow).value = wsSource.Rows(i).value
                 wsDest.Cells(destRow, colDate).value = originalShiftDate
@@ -138,31 +182,18 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
                 wsDest.Cells(destRow, colTotal).Formula = "=ROUND(" & wsDest.Cells(destRow, colDuration).Address(False, False) & "*" & wsDest.Cells(destRow, colRate).Address(False, False) & ",2)"
                 destRow = destRow + 1
 
-                wsDest.Rows(destRow).value = wsSource.Rows(i).value
-                wsDest.Cells(destRow, colDate).value = originalShiftDate
-                wsDest.Cells(destRow, colStart).value = TimeValue("6:00:00 AM")
-                wsDest.Cells(destRow, colEnd).value = originalEnd
-
-                Dim rate2 As Double
-                If InStr(1, UCase$(CStr(wsSource.Cells(i, colName).value)), "MEDS", vbTextCompare) > 0 Then
-                    rate2 = 27.22
-                Else
-                    rate2 = 26.88
+                If hasPostONSSegment Then
+                    wsDest.Rows(destRow).value = wsSource.Rows(i).value
+                    wsDest.Cells(destRow, colDate).value = originalShiftDate
+                    wsDest.Cells(destRow, colStart).value = postONSStart
+                    wsDest.Cells(destRow, colEnd).value = postONSEnd
+                    wsDest.Cells(destRow, colRate).value = originalRate
+                    wsDest.Cells(destRow, colDuration).value = Round((postONSEnd - postONSStart) * 24, 2)
+                    wsDest.Cells(destRow, colClient).value = itemDescriptionOverride
+                    wsDest.Cells(destRow, colUnit).value = ""
+                    wsDest.Cells(destRow, colTotal).Formula = "=ROUND(" & wsDest.Cells(destRow, colDuration).Address(False, False) & "*" & wsDest.Cells(destRow, colRate).Address(False, False) & ",2)"
+                    destRow = destRow + 1
                 End If
-                wsDest.Cells(destRow, colRate).value = rate2
-
-                Dim dur As Double
-                If IsDate(originalEnd) And originalEnd < TimeValue("6:00:00 AM") Then
-                    dur = (originalEnd + 1) - TimeValue("6:00:00 AM")
-                Else
-                    dur = originalEnd - TimeValue("6:00:00 AM")
-                End If
-                wsDest.Cells(destRow, colDuration).value = Round(dur * 24, 2)
-
-                wsDest.Cells(destRow, colClient).value = itemDescriptionOverride
-                wsDest.Cells(destRow, colUnit).value = ""
-                wsDest.Cells(destRow, colTotal).Formula = "=ROUND(" & wsDest.Cells(destRow, colDuration).Address(False, False) & "*" & wsDest.Cells(destRow, colRate).Address(False, False) & ",2)"
-                destRow = destRow + 1
 
             Else
                 Dim normalizedShiftDate As Variant
@@ -210,34 +241,81 @@ Private Sub ProcessSingleClient(ByVal wsSource As Worksheet, ByVal targetClient 
 
     For i = TABLE_HEADER_ROW + 1 To destRow - 1
         Dim unitValue As String
-        Dim isFollowingONSRow As Boolean
         unitValue = CStr(wsDest.Cells(i, colUnit).value)
-        isFollowingONSRow = False
-
-        If unitValue = "" And i > TABLE_HEADER_ROW + 1 Then
-            isFollowingONSRow = (InStr(1, CStr(wsDest.Cells(i - 1, colUnit).value), "ONS", vbTextCompare) > 0)
-        End If
 
         If unitValue <> "" Then
             wsDest.Cells(i, colHelper).value = Replace(unitValue, " - ONS", "")
-        ElseIf i > TABLE_HEADER_ROW + 1 Then
-            wsDest.Cells(i, colHelper).value = wsDest.Cells(i - 1, colHelper).value
+        Else
+            Dim nextUnitValue As String
+            nextUnitValue = ""
+
+            If i < destRow - 1 Then
+                nextUnitValue = CStr(wsDest.Cells(i + 1, colUnit).value)
+                If InStr(1, nextUnitValue, "ONS", vbTextCompare) > 0 Then
+                    If Trim$(CStr(wsDest.Cells(i, colName).value)) = Trim$(CStr(wsDest.Cells(i + 1, colName).value)) And _
+                       GetSortDateValue(wsDest.Cells(i, colDate).value) = GetSortDateValue(wsDest.Cells(i + 1, colDate).value) Then
+                        wsDest.Cells(i, colHelper).value = Replace(nextUnitValue, " - ONS", "")
+                    End If
+                End If
+            End If
+
+            If Trim$(CStr(wsDest.Cells(i, colHelper).value)) = "" And i > TABLE_HEADER_ROW + 1 Then
+                wsDest.Cells(i, colHelper).value = wsDest.Cells(i - 1, colHelper).value
+            End If
         End If
 
-        If isFollowingONSRow Then
-            wsDest.Cells(i, colSortDate).value = wsDest.Cells(i - 1, colSortDate).value
-            wsDest.Cells(i, colSortTime).value = wsDest.Cells(i - 1, colSortTime).value
-            wsDest.Cells(i, colSortHours).value = GetSortHoursValue(wsDest.Cells(i - 1, colDuration).value) + _
-                                                 GetSortHoursValue(wsDest.Cells(i, colDuration).value)
-            wsDest.Cells(i, colShiftSequence).value = 2
-            wsDest.Cells(i - 1, colSortHours).value = wsDest.Cells(i, colSortHours).value
-        Else
-            wsDest.Cells(i, colSortDate).value = GetSortDateValue(wsDest.Cells(i, colDate).value)
-            wsDest.Cells(i, colSortTime).value = GetSortTimeValue(wsDest.Cells(i, colStart).value)
-            wsDest.Cells(i, colSortHours).value = GetSortHoursValue(wsDest.Cells(i, colDuration).value)
-            wsDest.Cells(i, colShiftSequence).value = 1
-        End If
     Next i
+
+    Dim currentRow As Long
+    currentRow = TABLE_HEADER_ROW + 1
+
+    Do While currentRow <= destRow - 1
+        Dim groupStartRow As Long
+        Dim groupEndRow As Long
+        Dim totalGroupHours As Double
+        Dim groupRow As Long
+
+        unitValue = CStr(wsDest.Cells(currentRow, colUnit).value)
+
+        If InStr(1, unitValue, "ONS", vbTextCompare) > 0 Then
+            groupStartRow = currentRow
+            If currentRow > TABLE_HEADER_ROW + 1 Then
+                If CStr(wsDest.Cells(currentRow - 1, colUnit).value) = "" Then
+                    If InvoiceRowsBelongToSameShift(wsDest, currentRow - 1, currentRow, colHelper, colDate, colName) Then
+                        groupStartRow = currentRow - 1
+                    End If
+                End If
+            End If
+
+            groupEndRow = currentRow
+            Do While groupEndRow < destRow - 1
+                If CStr(wsDest.Cells(groupEndRow + 1, colUnit).value) <> "" Then Exit Do
+                If Not InvoiceRowsBelongToSameShift(wsDest, currentRow, groupEndRow + 1, colHelper, colDate, colName) Then Exit Do
+                groupEndRow = groupEndRow + 1
+            Loop
+
+            totalGroupHours = 0
+            For groupRow = groupStartRow To groupEndRow
+                totalGroupHours = totalGroupHours + GetSortHoursValue(wsDest.Cells(groupRow, colDuration).value)
+            Next groupRow
+
+            For groupRow = groupStartRow To groupEndRow
+                wsDest.Cells(groupRow, colSortDate).value = GetSortDateValue(wsDest.Cells(groupStartRow, colDate).value)
+                wsDest.Cells(groupRow, colSortTime).value = GetSortTimeValue(wsDest.Cells(groupStartRow, colStart).value)
+                wsDest.Cells(groupRow, colSortHours).value = totalGroupHours
+                wsDest.Cells(groupRow, colShiftSequence).value = groupRow - groupStartRow + 1
+            Next groupRow
+
+            currentRow = groupEndRow + 1
+
+        Else
+            wsDest.Cells(currentRow, colSortDate).value = GetSortDateValue(wsDest.Cells(currentRow, colDate).value)
+            wsDest.Cells(currentRow, colSortTime).value = GetSortTimeValue(wsDest.Cells(currentRow, colStart).value)
+            wsDest.Cells(currentRow, colSortHours).value = GetSortHoursValue(wsDest.Cells(currentRow, colDuration).value)
+            wsDest.Cells(currentRow, colShiftSequence).value = 1
+            currentRow = currentRow + 1
+        End If
+    Loop
 
     ApplyPostBuildOrdering wsDest, TABLE_HEADER_ROW + 1, destRow - 1, colHelper, colSortDate, colSortTime, colSortHours, colName, colShiftSequence
 
@@ -953,6 +1031,15 @@ Private Function GetSortHoursValue(ByVal shiftHours As Variant) As Double
     Else
         GetSortHoursValue = 0
     End If
+End Function
+
+Private Function InvoiceRowsBelongToSameShift(ByVal ws As Worksheet, ByVal firstRow As Long, ByVal secondRow As Long, _
+    ByVal colHelper As Long, ByVal colDate As Long, ByVal colName As Long) As Boolean
+
+    InvoiceRowsBelongToSameShift = _
+        (Trim$(CStr(ws.Cells(firstRow, colHelper).value)) = Trim$(CStr(ws.Cells(secondRow, colHelper).value)) And _
+         Trim$(CStr(ws.Cells(firstRow, colName).value)) = Trim$(CStr(ws.Cells(secondRow, colName).value)) And _
+         GetSortDateValue(ws.Cells(firstRow, colDate).value) = GetSortDateValue(ws.Cells(secondRow, colDate).value))
 End Function
 
 Private Sub ApplyPostBuildOrdering(ByVal wsDest As Worksheet, ByVal firstDataRow As Long, ByVal lastDataRow As Long, _

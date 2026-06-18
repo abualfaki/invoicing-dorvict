@@ -1,5 +1,8 @@
 Option Explicit
 
+Private Const AMOUNT_HIGHLIGHT_COLOR As Long = &H3271E9
+Private Const CLEAR_COLORS_BUTTON_NAME As String = "btnClearInvoiceColors"
+
 Public Sub RunReenaInvoiceSheetEdgeCaseChecks()
     Const HEADER_ROW As Long = 13
     Const FIRST_DATA_ROW As Long = 14
@@ -19,6 +22,7 @@ Public Sub RunReenaInvoiceSheetEdgeCaseChecks()
 
     For sheetIndex = 2 To ThisWorkbook.Worksheets.Count
         If SheetLooksLikeInvoice(ThisWorkbook.Worksheets(sheetIndex), HEADER_ROW) Then
+            EnsureClearColorsButton ThisWorkbook.Worksheets(sheetIndex)
             ApplyEdgeCaseChecksToSheet ThisWorkbook.Worksheets(sheetIndex), HEADER_ROW, FIRST_DATA_ROW, _
                                        AMOUNT_THRESHOLD, DURATION_TOLERANCE, _
                                        flaggedDurationCells, flaggedAmountCells, flaggedCodeCells
@@ -30,6 +34,12 @@ Public Sub RunReenaInvoiceSheetEdgeCaseChecks()
            flaggedDurationCells & " duration cell(s) highlighted yellow." & vbCrLf & _
            flaggedAmountCells & " amount cell(s) highlighted orange." & vbCrLf & _
            flaggedCodeCells & " code cell(s) marked ONS in red.", vbInformation
+End Sub
+
+Public Sub ClearActiveInvoiceSheetColors()
+    If TypeOf ActiveSheet Is Worksheet Then
+        ClearInvoiceSheetColors ActiveSheet
+    End If
 End Sub
 
 Private Sub ApplyEdgeCaseChecksToSheet(ByVal ws As Worksheet, ByVal headerRow As Long, ByVal firstDataRow As Long, _
@@ -126,7 +136,7 @@ Private Sub ApplyEdgeCaseChecksToSheet(ByVal ws As Worksheet, ByVal headerRow As
 
         If TryParseDecimalValue(ws.Cells(rowNumber, colAmount).Value, numericValue) Then
             If numericValue > amountThreshold Then
-                ws.Cells(rowNumber, colAmount).Interior.Color = RGB(255, 192, 0)
+                ws.Cells(rowNumber, colAmount).Interior.Color = AMOUNT_HIGHLIGHT_COLOR
                 flaggedAmountCells = flaggedAmountCells + 1
             End If
         End If
@@ -219,6 +229,34 @@ Private Function FindHeaderColumn(ByVal ws As Worksheet, ByVal headerRow As Long
         FindHeaderColumn = headerCell.Column
     End If
 End Function
+
+Private Sub EnsureClearColorsButton(ByVal ws As Worksheet)
+    Dim buttonObject As Button
+    Dim anchorCell As Range
+
+    RemoveClearColorsButton ws
+    Set anchorCell = ws.Range("L2")
+    Set buttonObject = ws.Buttons.Add(anchorCell.Left, anchorCell.Top, 120, 28)
+
+    With buttonObject
+        .Name = CLEAR_COLORS_BUTTON_NAME
+        .Caption = "Clear Colors"
+        .OnAction = "'" & ThisWorkbook.Name & "'!ClearActiveInvoiceSheetColors"
+    End With
+End Sub
+
+Private Sub RemoveClearColorsButton(ByVal ws As Worksheet)
+    On Error Resume Next
+    ws.Shapes(CLEAR_COLORS_BUTTON_NAME).Delete
+    ws.Buttons(CLEAR_COLORS_BUTTON_NAME).Delete
+    On Error GoTo 0
+End Sub
+
+Private Sub ClearInvoiceSheetColors(ByVal ws As Worksheet)
+    ws.Cells.Interior.Pattern = xlNone
+    ws.Cells.Font.ColorIndex = xlAutomatic
+    MsgBox "All cell colors cleared for sheet '" & ws.Name & "'.", vbInformation
+End Sub
 
 Private Function GetCellNumericValue(ByVal ws As Worksheet, ByVal rowNumber As Long, ByVal colNumber As Long) As Double
     Dim numericValue As Double

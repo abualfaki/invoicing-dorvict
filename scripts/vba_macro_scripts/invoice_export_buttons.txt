@@ -250,12 +250,24 @@ Private Function BuildInvoiceExportFileName(ByVal ws As Worksheet) As String
 End Function
 
 Private Function ResolveChecklistReportTitle(ByVal ws As Worksheet) As String
-    Dim reportTitle As String
+    Dim primaryTitle As String
+    Dim secondaryTitle As String
 
-    reportTitle = Trim$(CStr(ws.Range("A2").Text))
-    If InStr(1, reportTitle, "REENA BI-WEEKLY REPORT", vbTextCompare) = 1 Then
-        ResolveChecklistReportTitle = reportTitle
+    primaryTitle = Trim$(CStr(ws.Range("A1").Text))
+    secondaryTitle = Trim$(CStr(ws.Range("A2").Text))
+
+    If IsChecklistReportTitle(primaryTitle) Then
+        ResolveChecklistReportTitle = primaryTitle
+        Exit Function
     End If
+
+    If IsChecklistReportTitle(secondaryTitle) Then
+        ResolveChecklistReportTitle = secondaryTitle
+    End If
+End Function
+
+Private Function IsChecklistReportTitle(ByVal reportTitle As String) As Boolean
+    IsChecklistReportTitle = (InStr(1, reportTitle, "BI-WEEKLY REPORT", vbTextCompare) = 1)
 End Function
 
 Private Function ResolveInvoiceLocationName(ByVal ws As Worksheet) As String

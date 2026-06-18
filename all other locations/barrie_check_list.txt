@@ -1,0 +1,665 @@
+Option Explicit
+
+Private Const CHECKLIST_SHEET_NAME As String = "Barrie check list"
+Private Const REPORT_TITLE As String = "BARRIE BI-WEEKLY REPORT"
+Private Const CHECKLIST_EXCEL_PATH As String = "C:\Users\Admin\OneDrive - Dorvict Home and Health Care Services\Documents\DORVICT FINANCE DEPT\Invoices\Toronto\2026\March 30 - April 12\excel"
+Private Const CHECKLIST_PDF_PATH As String = "C:\Users\Admin\OneDrive - Dorvict Home and Health Care Services\Documents\DORVICT FINANCE DEPT\Invoices\Toronto\2026\March 30 - April 12\pdfs"
+Private Const EXCEL_BUTTON_NAME As String = "btnSaveBarrieChecklistAsExcel"
+Private Const PDF_BUTTON_NAME As String = "btnSaveBarrieChecklistAsPdf"
+Private Const HEADER_ROW As Long = 3
+Private Const FIRST_DATA_ROW As Long = 4
+Private Const CLIENT_CELL As String = "A9"
+Private Const CLIENT_FALLBACK_CELL As String = "A10"
+Private Const LOCATION_CELL As String = "C14"
+Private Const PERIOD_CELL As String = "C8"
+Private Const DATE_SENT_CELL As String = "G10"
+Private Const INVOICE_NUMBER_CELL As String = "G9"
+Private Const SUMMARY_LABEL_COLUMN As String = "F"
+Private Const SUMMARY_AMOUNT_COLUMN As String = "G"
+
+Public Sub BuildBarrieChecklistSheet()
+    Dim sourceSheetNames As Collection
+    Dim groupedClientNames As Collection
+    Dim wsChecklist As Worksheet
+    Dim outputRow As Long
+    Dim lastDataRow As Long
+    Dim finalTableRow As Long
+    Dim reportPeriodText As String
+    Dim dateSentText As String
+    Dim clientName As Variant
+
+    Set sourceSheetNames = GetChecklistSourceSheetNames()
+    If sourceSheetNames.Count = 0 Then
+        MsgBox "No invoice sheets were found from the second tab onward.", vbInformation
+        Exit Sub
+    End If
+
+    Set wsChecklist = GetOrCreateChecklistSheet()
+    reportPeriodText = ResolveChecklistReportPeriod(ThisWorkbook.Worksheets(CStr(sourceSheetNames(1))))
+    dateSentText = ResolveChecklistDateSent(ThisWorkbook.Worksheets(CStr(sourceSheetNames(1))))
+    WriteChecklistHeaders wsChecklist, reportPeriodText, dateSentText
+    Set groupedClientNames = GetGroupedClientNames(sourceSheetNames)
+
+    outputRow = FIRST_DATA_ROW
+    For Each clientName In groupedClientNames
+        AppendChecklistRowsForClient sourceSheetNames, CStr(clientName), wsChecklist, outputRow
+    Next clientName
+
+    lastDataRow = outputRow - 1
+    finalTableRow = AddChecklistTotalRow(wsChecklist, lastDataRow)
+
+    ApplyChecklistFormatting wsChecklist, finalTableRow
+    ApplyChecklistColumnWidths wsChecklist
+    ApplyChecklistPrintSetup wsChecklist, finalTableRow
+    AddBarrieChecklistPdfButton wsChecklist
+    wsChecklist.Activate
+
+    MsgBox CStr(outputRow - FIRST_DATA_ROW) & " Barrie checklist row(s) created.", vbInformation
+End Sub
+
+Public Sub SaveActiveBarrieChecklistAsPdf()
+    ExportBarrieChecklistAsPdf ResolveBarrieChecklistWorksheet()
+End Sub
+
+Public Sub SaveActiveBarrieChecklistAsExcel()
+    ExportBarrieChecklistAsExcel ResolveBarrieChecklistWorksheet()
+End Sub
+
+Private Function GetGroupedClientNames(ByVal sourceSheetNames As Collection) As Collection
+    Dim clientNames As New Collection
+    Dim sheetName As Variant
+    Dim clientName As String
+
+    For Each sheetName In sourceSheetNames
+        clientName = GetChecklistClientName(ThisWorkbook.Worksheets(CStr(sheetName)))
+        If Len(clientName) > 0 Then
+            If Not CollectionContainsText(clientNames, clientName) Then
+                clientNames.Add clientName
+            End If
+        End If
+    Next sheetName
+
+    Set GetGroupedClientNames = clientNames
+End Function
+
+Private Function GetChecklistSourceSheetNames() As Collection
+    Dim sheetNames As New Collection
+    Dim sheetIndex As Long
+    Dim ws As Worksheet
+
+    For sheetIndex = 2 To ThisWorkbook.Worksheets.Count
+        Set ws = ThisWorkbook.Worksheets(sheetIndex)
+        If StrComp(ws.Name, CHECKLIST_SHEET_NAME, vbTextCompare) <> 0 Then
+            sheetNames.Add ws.Name
+        End If
+    Next sheetIndex
+
+    Set GetChecklistSourceSheetNames = sheetNames
+End Function
+
+Private Function GetOrCreateChecklistSheet() As Worksheet
+    Dim wsChecklist As Worksheet
+
+    On Error Resume Next
+    Set wsChecklist = ThisWorkbook.Worksheets(CHECKLIST_SHEET_NAME)
+    On Error GoTo 0
+
+    If wsChecklist Is Nothing Then
+        Set wsChecklist = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        wsChecklist.Name = CHECKLIST_SHEET_NAME
+    Else
+        wsChecklist.Cells.Clear
+        wsChecklist.Move After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count)
+    End If
+
+    Set GetOrCreateChecklistSheet = wsChecklist
+End Function
+
+Private Sub AddBarrieChecklistPdfButton(ByVal ws As Worksheet)
+    Dim anchorCell As Range
+    Dim buttonObject As Button
+
+    RemoveBarrieChecklistExportButtons ws
+    Set anchorCell = ResolveBarrieChecklistButtonAnchorCell(ws)
+    Set buttonObject = ws.Buttons.Add(anchorCell.Left, anchorCell.Top, 120, 28)
+
+    With buttonObject
+        .Name = EXCEL_BUTTON_NAME
+        .Caption = "Save as Excel"
+        .OnAction = "'" & ThisWorkbook.Name & "'!SaveActiveBarrieChecklistAsExcel"
+    End With
+
+    Set buttonObject = ws.Buttons.Add(anchorCell.Left, anchorCell.Top + 32, 120, 28)
+
+    With buttonObject
+        .Name = PDF_BUTTON_NAME
+        .Caption = "Save as PDF"
+        .OnAction = "'" & ThisWorkbook.Name & "'!SaveActiveBarrieChecklistAsPdf"
+    End With
+End Sub
+
+Private Sub RemoveBarrieChecklistExportButtons(ByVal ws As Worksheet)
+    On Error Resume Next
+    ws.Shapes(EXCEL_BUTTON_NAME).Delete
+    ws.Buttons(EXCEL_BUTTON_NAME).Delete
+    ws.Shapes(PDF_BUTTON_NAME).Delete
+    ws.Buttons(PDF_BUTTON_NAME).Delete
+    On Error GoTo 0
+End Sub
+
+Private Sub WriteChecklistHeaders(ByVal wsChecklist As Worksheet, ByVal reportPeriodText As String, ByVal dateSentText As String)
+    With wsChecklist.Range(wsChecklist.Cells(1, 1), wsChecklist.Cells(1, 4))
+        .Merge
+        If Len(reportPeriodText) > 0 Then
+            .Value = REPORT_TITLE & " " & reportPeriodText
+        Else
+            .Value = REPORT_TITLE
+        End If
+        .Font.Name = "Arial"
+        .Font.Size = 12
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+    End With
+
+    With wsChecklist.Range(wsChecklist.Cells(2, 1), wsChecklist.Cells(2, 4))
+        .Merge
+        If Len(dateSentText) > 0 Then
+            .Value = "Date Sent: " & dateSentText
+        Else
+            .Value = "Date Sent:"
+        End If
+        .Font.Name = "Arial"
+        .Font.Size = 10
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+    End With
+
+    wsChecklist.Cells(HEADER_ROW, 1).Value = "Client Name"
+    wsChecklist.Cells(HEADER_ROW, 2).Value = "Location"
+    wsChecklist.Cells(HEADER_ROW, 3).Value = "Invoice #"
+    wsChecklist.Cells(HEADER_ROW, 4).Value = "Subtotal Amount"
+
+    With wsChecklist.Range(wsChecklist.Cells(HEADER_ROW, 1), wsChecklist.Cells(HEADER_ROW, 4))
+        .Font.Name = "Arial"
+        .Font.Size = 10
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        .Borders.LineStyle = xlContinuous
+        .Borders.Weight = xlMedium
+    End With
+End Sub
+
+Private Sub AppendChecklistRowsForClient(ByVal sourceSheetNames As Collection, ByVal targetClient As String, ByVal wsChecklist As Worksheet, ByRef outputRow As Long)
+    Dim sheetName As Variant
+    Dim wsSource As Worksheet
+    Dim showClientName As Boolean
+
+    showClientName = True
+
+    For Each sheetName In sourceSheetNames
+        Set wsSource = ThisWorkbook.Worksheets(CStr(sheetName))
+        If StrComp(GetChecklistClientName(wsSource), targetClient, vbTextCompare) = 0 Then
+            AppendChecklistRow wsSource, wsChecklist, outputRow, showClientName
+            showClientName = False
+        End If
+    Next sheetName
+End Sub
+
+Private Sub AppendChecklistRow(ByVal wsSource As Worksheet, ByVal wsChecklist As Worksheet, ByRef outputRow As Long, ByVal showClientName As Boolean)
+    Dim subtotalRow As Long
+    Dim locationName As String
+    Dim clientName As String
+    Dim invoiceNumber As String
+    Dim subtotalAmount As Variant
+
+    subtotalRow = FindSummaryLabelRow(wsSource, "SUBTOTAL")
+    If subtotalRow = 0 Then Exit Sub
+
+    clientName = GetChecklistClientName(wsSource)
+    locationName = Trim$(CStr(wsSource.Range(LOCATION_CELL).Value))
+
+    If clientName = "" And locationName = "" Then Exit Sub
+
+    If showClientName Then
+        wsChecklist.Cells(outputRow, 1).Value = clientName
+    Else
+        wsChecklist.Cells(outputRow, 1).Value = ""
+    End If
+
+    invoiceNumber = Trim$(CStr(wsSource.Range(INVOICE_NUMBER_CELL).Text))
+    subtotalAmount = RoundNumericValue(wsSource.Range(SUMMARY_AMOUNT_COLUMN & subtotalRow).Value)
+
+    wsChecklist.Cells(outputRow, 2).Value = locationName
+    wsChecklist.Cells(outputRow, 3).Value = invoiceNumber
+    wsChecklist.Cells(outputRow, 4).Value = subtotalAmount
+
+    outputRow = outputRow + 1
+End Sub
+
+Private Function AddChecklistTotalRow(ByVal wsChecklist As Worksheet, ByVal lastDataRow As Long) As Long
+    Dim totalsRow As Long
+
+    If lastDataRow < FIRST_DATA_ROW Then
+        totalsRow = FIRST_DATA_ROW
+    Else
+        totalsRow = lastDataRow + 1
+    End If
+
+    wsChecklist.Cells(totalsRow, 1).Value = "Total"
+    If lastDataRow >= FIRST_DATA_ROW Then
+        wsChecklist.Cells(totalsRow, 3).Value = CountDistinctInvoiceNumbers(wsChecklist, lastDataRow)
+    Else
+        wsChecklist.Cells(totalsRow, 3).Value = 0
+    End If
+    If lastDataRow >= FIRST_DATA_ROW Then
+        wsChecklist.Cells(totalsRow, 4).Formula = "=SUM(D" & FIRST_DATA_ROW & ":D" & lastDataRow & ")"
+    Else
+        wsChecklist.Cells(totalsRow, 4).Value = 0
+    End If
+
+    AddChecklistTotalRow = totalsRow
+End Function
+
+Private Sub ApplyChecklistFormatting(ByVal wsChecklist As Worksheet, ByVal finalTableRow As Long)
+    Dim tableRange As Range
+    Dim amountRange As Range
+
+    If finalTableRow < HEADER_ROW Then Exit Sub
+
+    Set tableRange = wsChecklist.Range(wsChecklist.Cells(HEADER_ROW, 1), wsChecklist.Cells(finalTableRow, 4))
+
+    With tableRange
+        .Font.Name = "Arial"
+        .Font.Size = 10
+        .VerticalAlignment = xlCenter
+        .Borders.LineStyle = xlContinuous
+        .Borders.Weight = xlThin
+    End With
+
+    If finalTableRow >= FIRST_DATA_ROW Then
+        Set amountRange = wsChecklist.Range(wsChecklist.Cells(FIRST_DATA_ROW, 4), wsChecklist.Cells(finalTableRow, 4))
+        amountRange.NumberFormat = "#,##0.00"
+    End If
+
+    wsChecklist.Rows(1).RowHeight = 22
+    wsChecklist.Rows(2).RowHeight = 20
+    wsChecklist.Rows(HEADER_ROW).RowHeight = 20
+    tableRange.Rows.RowHeight = 20
+    wsChecklist.Rows(finalTableRow).Font.Bold = True
+
+    wsChecklist.Columns(1).HorizontalAlignment = xlLeft
+    wsChecklist.Columns(2).HorizontalAlignment = xlLeft
+    wsChecklist.Columns(3).HorizontalAlignment = xlCenter
+    wsChecklist.Columns(3).NumberFormat = "@"
+    wsChecklist.Columns(4).HorizontalAlignment = xlRight
+End Sub
+
+Private Function GetChecklistClientName(ByVal wsSource As Worksheet) As String
+    GetChecklistClientName = Trim$(CStr(wsSource.Range(CLIENT_CELL).Value))
+
+    If Len(GetChecklistClientName) = 0 Then
+        GetChecklistClientName = Trim$(CStr(wsSource.Range(CLIENT_FALLBACK_CELL).Value))
+    End If
+End Function
+
+Private Sub ApplyChecklistColumnWidths(ByVal wsChecklist As Worksheet)
+    wsChecklist.Columns(1).ColumnWidth = 41
+    wsChecklist.Columns(2).ColumnWidth = 30
+    wsChecklist.Columns(3).ColumnWidth = 14
+    wsChecklist.Columns(4).ColumnWidth = 18
+End Sub
+
+Private Sub ApplyChecklistPrintSetup(ByVal wsChecklist As Worksheet, ByVal lastDataRow As Long)
+    If lastDataRow < 1 Then Exit Sub
+
+    With wsChecklist.PageSetup
+        .PrintArea = wsChecklist.Range(wsChecklist.Cells(1, 1), wsChecklist.Cells(lastDataRow, 4)).Address
+        .Orientation = xlLandscape
+        .Zoom = False
+        .FitToPagesWide = 1
+        .FitToPagesTall = False
+        .CenterHorizontally = True
+        .LeftMargin = Application.InchesToPoints(0.25)
+        .RightMargin = Application.InchesToPoints(0.25)
+        .TopMargin = Application.InchesToPoints(0.5)
+        .BottomMargin = Application.InchesToPoints(0.5)
+        .HeaderMargin = Application.InchesToPoints(0.25)
+        .FooterMargin = Application.InchesToPoints(0.25)
+    End With
+End Sub
+
+Private Sub ExportBarrieChecklistAsPdf(ByVal ws As Worksheet)
+    Dim fileBaseName As String
+    Dim exportPath As String
+    Dim fullFilePath As String
+    Dim tempWorkbook As Workbook
+    Dim tempWorksheet As Worksheet
+
+    fileBaseName = BuildBarrieChecklistPdfFileName(ws)
+    If Len(fileBaseName) = 0 Then Exit Sub
+
+    exportPath = NormalizeFolderPath(CHECKLIST_PDF_PATH)
+    EnsureFolderExists exportPath
+    fullFilePath = exportPath & fileBaseName & ".pdf"
+
+    On Error GoTo CleanFail
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+
+    DeleteFileIfExists fullFilePath
+
+    ws.Calculate
+    ws.Copy
+    Set tempWorkbook = ActiveWorkbook
+    Set tempWorksheet = tempWorkbook.Worksheets(1)
+
+    RemoveBarrieChecklistExportButtons tempWorksheet
+    PrepareBarrieChecklistForPdfExport ws, tempWorksheet
+
+    tempWorksheet.ExportAsFixedFormat Type:=xlTypePDF, _
+                                     Filename:=fullFilePath, _
+                                     Quality:=xlQualityStandard, _
+                                     IncludeDocProperties:=True, _
+                                     IgnorePrintAreas:=False, _
+                                     OpenAfterPublish:=False
+
+    tempWorkbook.Close SaveChanges:=False
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    MsgBox "PDF saved to:" & vbCrLf & fullFilePath, vbInformation
+    Exit Sub
+
+CleanFail:
+    On Error Resume Next
+    If Not tempWorkbook Is Nothing Then tempWorkbook.Close SaveChanges:=False
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    MsgBox "PDF export failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub ExportBarrieChecklistAsExcel(ByVal ws As Worksheet)
+    Dim fileBaseName As String
+    Dim exportPath As String
+    Dim fullFilePath As String
+    Dim tempWorkbook As Workbook
+
+    fileBaseName = BuildBarrieChecklistPdfFileName(ws)
+    If Len(fileBaseName) = 0 Then Exit Sub
+
+    exportPath = NormalizeFolderPath(CHECKLIST_EXCEL_PATH)
+    EnsureFolderExists exportPath
+    fullFilePath = exportPath & fileBaseName & ".xlsx"
+
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    On Error GoTo CleanFail
+
+    DeleteFileIfExists fullFilePath
+    ws.Copy
+    Set tempWorkbook = ActiveWorkbook
+
+    RemoveBarrieChecklistExportButtons tempWorkbook.Worksheets(1)
+    tempWorkbook.SaveAs Filename:=fullFilePath, FileFormat:=xlOpenXMLWorkbook
+    tempWorkbook.Close SaveChanges:=False
+
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+
+    MsgBox "Excel workbook saved to:" & vbCrLf & fullFilePath, vbInformation
+    Exit Sub
+
+CleanFail:
+    On Error Resume Next
+    If Not tempWorkbook Is Nothing Then tempWorkbook.Close SaveChanges:=False
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    MsgBox "Excel export failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Function BuildBarrieChecklistPdfFileName(ByVal ws As Worksheet) As String
+    Dim reportTitle As String
+
+    reportTitle = Trim$(CStr(ws.Range("A1").Text))
+    If Len(reportTitle) = 0 Then
+        MsgBox "Cell A1 is blank. Enter a report title before exporting.", vbExclamation
+        Exit Function
+    End If
+
+    BuildBarrieChecklistPdfFileName = SanitizeFileName(reportTitle)
+End Function
+
+Private Function ResolveBarrieChecklistWorksheet() As Worksheet
+    Set ResolveBarrieChecklistWorksheet = ActiveSheet
+End Function
+
+Private Sub PrepareBarrieChecklistForPdfExport(ByVal sourceWorksheet As Worksheet, ByVal exportWorksheet As Worksheet)
+    Dim printAreaAddress As String
+
+    printAreaAddress = ResolveWorksheetPrintArea(sourceWorksheet)
+    If Len(printAreaAddress) > 0 Then
+        exportWorksheet.PageSetup.PrintArea = printAreaAddress
+    End If
+
+    exportWorksheet.Calculate
+End Sub
+
+Private Function ResolveBarrieChecklistButtonAnchorCell(ByVal ws As Worksheet) As Range
+    Dim placementRange As Range
+    Dim anchorRow As Long
+    Dim anchorColumn As Long
+
+    Set placementRange = ResolveBarrieChecklistButtonPlacementRange(ws)
+    If placementRange Is Nothing Then
+        Set ResolveBarrieChecklistButtonAnchorCell = ws.Range("F2")
+        Exit Function
+    End If
+
+    anchorRow = placementRange.Row
+    If anchorRow < 2 Then anchorRow = 2
+
+    anchorColumn = placementRange.Column + placementRange.Columns.Count + 1
+    If anchorColumn > ws.Columns.Count Then
+        anchorColumn = ws.Columns.Count
+    End If
+
+    Set ResolveBarrieChecklistButtonAnchorCell = ws.Cells(anchorRow, anchorColumn)
+End Function
+
+Private Function ResolveBarrieChecklistButtonPlacementRange(ByVal ws As Worksheet) As Range
+    Dim printAreaAddress As String
+
+    On Error Resume Next
+    printAreaAddress = Trim$(ws.PageSetup.PrintArea)
+    If Len(printAreaAddress) > 0 Then
+        Set ResolveBarrieChecklistButtonPlacementRange = ws.Range(printAreaAddress)
+    End If
+    On Error GoTo 0
+
+    If ResolveBarrieChecklistButtonPlacementRange Is Nothing Then
+        Set ResolveBarrieChecklistButtonPlacementRange = GetUsedContentRange(ws)
+    End If
+End Function
+
+Private Function FindSummaryLabelRow(ByVal ws As Worksheet, ByVal labelText As String) As Long
+    Dim foundCell As Range
+
+    On Error Resume Next
+    Set foundCell = ws.Columns(SUMMARY_LABEL_COLUMN).Find(What:=labelText, LookIn:=xlValues, LookAt:=xlWhole, _
+        SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)
+    On Error GoTo 0
+
+    If Not foundCell Is Nothing Then
+        FindSummaryLabelRow = foundCell.Row
+    End If
+End Function
+
+Private Function ResolveChecklistReportPeriod(ByVal wsSource As Worksheet) As String
+    Dim rawPeriodText As String
+
+    rawPeriodText = Trim$(CStr(wsSource.Range(PERIOD_CELL).Value))
+    ResolveChecklistReportPeriod = Trim$(Replace(rawPeriodText, "For the Period: ", "", 1, 1, vbTextCompare))
+End Function
+
+Private Function ResolveChecklistDateSent(ByVal wsSource As Worksheet) As String
+    ResolveChecklistDateSent = Trim$(CStr(wsSource.Range(DATE_SENT_CELL).Text))
+End Function
+
+Private Function CollectionContainsText(ByVal values As Collection, ByVal targetValue As String) As Boolean
+    Dim item As Variant
+
+    For Each item In values
+        If StrComp(CStr(item), targetValue, vbTextCompare) = 0 Then
+            CollectionContainsText = True
+            Exit Function
+        End If
+    Next item
+End Function
+
+Private Function CountDistinctInvoiceNumbers(ByVal wsChecklist As Worksheet, ByVal lastDataRow As Long) As Long
+    Dim seenInvoiceNumbers As New Collection
+    Dim rowNumber As Long
+    Dim invoiceNumber As String
+
+    For rowNumber = FIRST_DATA_ROW To lastDataRow
+        invoiceNumber = Trim$(CStr(wsChecklist.Cells(rowNumber, 3).Value))
+        If Len(invoiceNumber) > 0 Then
+            On Error Resume Next
+            seenInvoiceNumbers.Add invoiceNumber, invoiceNumber
+            On Error GoTo 0
+        End If
+    Next rowNumber
+
+    CountDistinctInvoiceNumbers = seenInvoiceNumbers.Count
+End Function
+
+Private Function SanitizeFileName(ByVal rawFileName As String) As String
+    Dim invalidChars As Variant
+    Dim idx As Long
+    Dim cleanedName As String
+
+    cleanedName = Trim$(rawFileName)
+    invalidChars = Array("\", "/", ":", "*", "?", Chr$(34), "<", ">", "|")
+
+    For idx = LBound(invalidChars) To UBound(invalidChars)
+        cleanedName = Replace(cleanedName, CStr(invalidChars(idx)), "-")
+    Next idx
+
+    Do While InStr(cleanedName, "  ") > 0
+        cleanedName = Replace(cleanedName, "  ", " ")
+    Loop
+
+    SanitizeFileName = Trim$(cleanedName)
+End Function
+
+Private Function NormalizeFolderPath(ByVal folderPath As String) As String
+    NormalizeFolderPath = Trim$(folderPath)
+    If Len(NormalizeFolderPath) = 0 Then Exit Function
+
+    If Right$(NormalizeFolderPath, 1) <> Application.PathSeparator Then
+        NormalizeFolderPath = NormalizeFolderPath & Application.PathSeparator
+    End If
+End Function
+
+Private Function ResolveWorksheetPrintArea(ByVal ws As Worksheet) As String
+    Dim existingPrintArea As String
+    Dim usedContentRange As Range
+
+    On Error Resume Next
+    existingPrintArea = Trim$(ws.PageSetup.PrintArea)
+    On Error GoTo 0
+
+    If Len(existingPrintArea) > 0 Then
+        ResolveWorksheetPrintArea = existingPrintArea
+        Exit Function
+    End If
+
+    Set usedContentRange = GetUsedContentRange(ws)
+    If Not usedContentRange Is Nothing Then
+        ResolveWorksheetPrintArea = usedContentRange.Address
+    End If
+End Function
+
+Private Function GetUsedContentRange(ByVal ws As Worksheet) As Range
+    Dim firstRowCell As Range
+    Dim lastRowCell As Range
+    Dim firstColumnCell As Range
+    Dim lastColumnCell As Range
+
+    On Error Resume Next
+    Set firstRowCell = ws.Cells.Find(What:="*", After:=ws.Cells(ws.Rows.Count, ws.Columns.Count), LookIn:=xlFormulas, _
+                                     LookAt:=xlPart, SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:=False)
+    Set lastRowCell = ws.Cells.Find(What:="*", After:=ws.Cells(1, 1), LookIn:=xlFormulas, _
+                                    LookAt:=xlPart, SearchOrder:=xlByRows, SearchDirection:=xlPrevious, MatchCase:=False)
+    Set firstColumnCell = ws.Cells.Find(What:="*", After:=ws.Cells(ws.Rows.Count, ws.Columns.Count), LookIn:=xlFormulas, _
+                                        LookAt:=xlPart, SearchOrder:=xlByColumns, SearchDirection:=xlNext, MatchCase:=False)
+    Set lastColumnCell = ws.Cells.Find(What:="*", After:=ws.Cells(1, 1), LookIn:=xlFormulas, _
+                                       LookAt:=xlPart, SearchOrder:=xlByColumns, SearchDirection:=xlPrevious, MatchCase:=False)
+    On Error GoTo 0
+
+    If firstRowCell Is Nothing Or lastRowCell Is Nothing Then Exit Function
+    If firstColumnCell Is Nothing Or lastColumnCell Is Nothing Then Exit Function
+
+    Set GetUsedContentRange = ws.Range(ws.Cells(firstRowCell.Row, firstColumnCell.Column), _
+                                       ws.Cells(lastRowCell.Row, lastColumnCell.Column))
+End Function
+
+Private Sub EnsureFolderExists(ByVal folderPath As String)
+    Dim parentPath As String
+
+    If Len(folderPath) = 0 Then
+        Err.Raise vbObjectError + 513, , "The export folder path is blank."
+    End If
+
+    If Right$(folderPath, 1) = Application.PathSeparator Then
+        folderPath = Left$(folderPath, Len(folderPath) - 1)
+    End If
+
+    If Len(folderPath) = 0 Or Dir$(folderPath, vbDirectory) <> "" Then Exit Sub
+
+    parentPath = Left$(folderPath, InStrRev(folderPath, Application.PathSeparator) - 1)
+    If Len(parentPath) > 0 And Dir$(parentPath, vbDirectory) = "" Then
+        EnsureFolderExists parentPath
+    End If
+
+    MkDir folderPath
+End Sub
+
+Private Sub DeleteFileIfExists(ByVal filePath As String)
+    If Len(Dir$(filePath, vbNormal)) > 0 Then
+        Kill filePath
+    End If
+End Sub
+
+Private Function TryGetNumericCellValue(ByVal rawValue As Variant, ByRef numericValue As Double) As Boolean
+    Dim cleanedValue As String
+
+    If IsError(rawValue) Or IsNull(rawValue) Or IsEmpty(rawValue) Then Exit Function
+
+    If IsNumeric(rawValue) Then
+        numericValue = CDbl(rawValue)
+        TryGetNumericCellValue = True
+        Exit Function
+    End If
+
+    cleanedValue = Trim$(CStr(rawValue))
+    cleanedValue = Replace(cleanedValue, ",", "")
+    cleanedValue = Replace(cleanedValue, "$", "")
+
+    If IsNumeric(cleanedValue) Then
+        numericValue = CDbl(cleanedValue)
+        TryGetNumericCellValue = True
+    End If
+End Function
+
+Private Function RoundNumericValue(ByVal rawValue As Variant) As Variant
+    Dim numericValue As Double
+
+    If TryGetNumericCellValue(rawValue, numericValue) Then
+        RoundNumericValue = Round(numericValue, 2)
+    Else
+        RoundNumericValue = rawValue
+    End If
+End Function
