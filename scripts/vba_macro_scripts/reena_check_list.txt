@@ -208,7 +208,7 @@ Private Function AddChecklistGlossary(ByVal wsChecklist As Worksheet, ByVal fina
     With wsChecklist.Cells(codesRow, 1)
         .Value = "CODES:"
         .Font.Name = "Arial"
-        .Font.Size = 12
+        .Font.Size = 8
         .Font.Bold = True
     End With
 

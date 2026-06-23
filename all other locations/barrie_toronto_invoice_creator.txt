@@ -276,7 +276,7 @@ Private Sub ProcessSingleClientNonReena(ByVal wsSource As Worksheet, ByVal targe
     SetPrintAreaThroughEnquiries wsDest
     ApplyPrintSetup wsDest
     InsertCompanyLogo wsDest
-    AddInvoiceExportButtonsForSheet wsDest
+    InvoiceExportButtons_AddForSheet wsDest
 End Sub
 
 Private Sub AddNonReenaShiftSegment(ByVal wsDest As Worksheet, ByVal sourceRow As Range, ByRef destRow As Long, _
